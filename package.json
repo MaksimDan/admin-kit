@@ -1,0 +1,46 @@
+{
+  "name": "@maksimdan/admin-kit",
+  "version": "0.1.0",
+  "description": "Config-driven admin panel kit for Next.js (App Router) + MongoDB with a single env-based admin. Declare entities as field lists; get CRUD routes, forms, tables, and a dashboard for free.",
+  "license": "UNLICENSED",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./server": {
+      "types": "./src/server.ts",
+      "default": "./src/server.ts"
+    }
+  },
+  "files": [
+    "src",
+    "template",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "react": ">=19",
+    "react-dom": ">=19",
+    "next": ">=15",
+    "next-auth": ">=4",
+    "mongodb": ">=6",
+    "zod": ">=3.23",
+    "lucide-react": ">=0.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.8",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "lucide-react": "^0.460.0",
+    "mongodb": "^6.11.0",
+    "next": "^15.5.19",
+    "next-auth": "^4.24.10",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.7.2",
+    "zod": "^4.4.3"
+  }
+}
