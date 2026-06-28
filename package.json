@@ -1,6 +1,6 @@
 {
   "name": "@maksimdan/admin-kit",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Config-driven admin panel kit for Next.js (App Router) + MongoDB with a single env-based admin. Declare entities as field lists; get CRUD routes, forms, tables, and a dashboard for free.",
   "license": "UNLICENSED",
   "exports": {
@@ -15,6 +15,10 @@
     "./image": {
       "types": "./src/imageUtils.ts",
       "default": "./src/imageUtils.ts"
+    },
+    "./mongo": {
+      "types": "./src/mongo.ts",
+      "default": "./src/mongo.ts"
     }
   },
   "files": [
