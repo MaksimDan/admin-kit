@@ -1,16 +1,34 @@
 // Copy to: src/lib/admin-kit-setup.ts
-// Run ONCE before any crud() route handles a request. The simplest way is to
-// import this file at the top of your src/config/resources.server.ts (or any
-// module your route files import).
+// Run ONCE before any crud route handles a request — import it from your route
+// files (and/or src/config/resources.server.ts).
 //
-// This is the injection seam: the kit gets the host's Mongo connection + admin
-// check here, and nowhere else.
-import { configureAdminKit } from '@maksimdan/admin-kit/server'
+// The kit now PROVIDES auth: createAdminAuth() builds the next-auth options +
+// requireAdmin from your single admin's credentials. You only supply env values
+// and the Mongo client.
+import { createAdminAuth, configureAdminKit } from '@maksimdan/admin-kit/server'
 import clientPromise from '@/lib/mongodb'
-import { requireAdmin } from '@/lib/auth-middleware'
 
-configureAdminKit({
-  clientPromise,
-  requireAdmin,
-  dbName: process.env.MONGODB_DB,
+export const { authOptions, requireAdmin } = createAdminAuth({
+  adminEmail: process.env.ADMIN_EMAIL!,
+  adminPassword: process.env.ADMIN_PASSWORD!,
+  totpSecret: process.env.AUTHENTICATION_KEY!,
+  nextAuthSecret: process.env.NEXTAUTH_SECRET!,
 })
+
+// Hand the kit's crud() the Mongo client + the admin check.
+configureAdminKit({ clientPromise, requireAdmin, dbName: process.env.MONGODB_DB })
+
+// Then, app-level (Next can't package route segments):
+//   app/api/auth/[...nextauth]/route.ts
+//     import NextAuth from 'next-auth'
+//     import { authOptions } from '@/lib/admin-kit-setup'
+//     const handler = NextAuth(authOptions)
+//     export { handler as GET, handler as POST }
+//
+//   app/admin/login/page.tsx
+//     'use client'
+//     import { LoginForm } from '@maksimdan/admin-kit'
+//     export default () => <LoginForm />
+//
+//   app/providers.tsx -> wrap children in <SessionProvider> (next-auth/react)
+//   admin dashboard header -> <SessionCountdown /> (from @maksimdan/admin-kit)

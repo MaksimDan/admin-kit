@@ -29,14 +29,35 @@ via `transpilePackages`. Add it as a git dependency:
    ```js
    content: [/* ...your globs... */, './node_modules/@maksimdan/admin-kit/src/**/*.{ts,tsx}']
    ```
-3. **Wire the seam** — the kit is datastore/auth-agnostic; give it your Mongo
-   client + admin check once (see `template/setup.example.ts`):
+3. **Set up auth + the seam** — the kit provides the admin auth; you supply
+   credentials + your Mongo client once (see `template/setup.example.ts`):
    ```ts
-   import { configureAdminKit } from '@maksimdan/admin-kit/server'
+   // src/lib/admin-kit-setup.ts
+   import { createAdminAuth, configureAdminKit } from '@maksimdan/admin-kit/server'
    import clientPromise from '@/lib/mongodb'
-   import { requireAdmin } from '@/lib/auth-middleware'
+   export const { authOptions, requireAdmin } = createAdminAuth({
+     adminEmail: process.env.ADMIN_EMAIL!,
+     adminPassword: process.env.ADMIN_PASSWORD!,
+     totpSecret: process.env.AUTHENTICATION_KEY!,
+     nextAuthSecret: process.env.NEXTAUTH_SECRET!,
+   })
    configureAdminKit({ clientPromise, requireAdmin, dbName: process.env.MONGODB_DB })
    ```
+4. **Mount NextAuth + the login page** (app-level — Next can't package routes):
+   ```tsx
+   // app/api/auth/[...nextauth]/route.ts
+   import NextAuth from 'next-auth'
+   import { authOptions } from '@/lib/admin-kit-setup'
+   const handler = NextAuth(authOptions)
+   export { handler as GET, handler as POST }
+
+   // app/admin/login/page.tsx
+   'use client'
+   import { LoginForm } from '@maksimdan/admin-kit'
+   export default () => <LoginForm />
+   ```
+   Wrap the app in `<SessionProvider>` (next-auth/react) and drop
+   `<SessionCountdown />` (from the kit) in your admin header.
 
 ## Declare entities
 
@@ -108,14 +129,17 @@ export const vehiclesResource: DefinedResource = {
 
 ## The host contract
 
-The kit expects the host to provide, via `configureAdminKit`:
-- a MongoDB `clientPromise`
-- a `requireAdmin(): Promise<NextResponse | null>` (401 when not admin)
+The kit provides auth (login + TOTP + absolute session + `requireAdmin`) and the
+CRUD/UI. The host provides:
+- the single admin's credentials + secrets (env) to `createAdminAuth`
+- a MongoDB `clientPromise` to `configureAdminKit`
 
-Everything else (auth setup, the `[...nextauth]` mount, route/layout/page files,
-env, Tailwind) stays in the app — Next can't package route segments.
+App-level pieces Next can't package stay in the app: the `[...nextauth]` route
+that mounts `authOptions`, `<SessionProvider>`, the route/layout/page files, env,
+and Tailwind config. `createAdminAuth` is configurable — pass
+`sessionTtlSeconds` to change the 30-minute default.
 
 ## Peer dependencies
 
 `react` ≥19 · `react-dom` ≥19 · `next` ≥15 · `next-auth` ≥4 · `mongodb` ≥6 ·
-`zod` ≥3.23 · `lucide-react` ≥0.4
+`zod` ≥3.23 · `lucide-react` ≥0.4 · `otplib` ≥12

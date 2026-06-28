@@ -1,5 +1,6 @@
 // Main entry — client-safe + isomorphic. No mongodb / next-server at runtime, so
 // it is safe to import from client components and from the site config.
+import './augment' // ambient next-auth type augmentation (role, expiresAt)
 
 // Core (field model + resource definition)
 export * from './field'
@@ -23,3 +24,7 @@ export { AdminGate } from './ui/AdminGate'
 export { AdminPageHeader } from './ui/AdminPageHeader'
 export { EmptyState } from './ui/EmptyState'
 export { useFocusTrap } from './ui/useFocusTrap'
+
+// Auth UI (the auth factory itself is server-only — see /server)
+export { LoginForm } from './LoginForm'
+export { SessionCountdown } from './SessionCountdown'
