@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import { PlusIcon, TrashIcon } from 'lucide-react'
 import type { Field } from './field'
 import { humanize } from './field'
@@ -16,7 +17,7 @@ interface Props {
 }
 
 // Dynamic add/remove list of free-text image URLs (the 'images' field type).
-function ImageUrlList({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+function ImageUrlList({ value, onChange, label }: { value: string[]; onChange: (v: string[]) => void; label?: string }) {
   const list = value.length ? value : ['']
   const set = (i: number, v: string) => onChange(list.map((u, idx) => (idx === i ? v : u)))
   const add = () => onChange([...list, ''])
@@ -29,6 +30,7 @@ function ImageUrlList({ value, onChange }: { value: string[]; onChange: (v: stri
             type="text"
             value={url}
             placeholder="https://..."
+            aria-label={`${label ?? 'Image'} URL ${i + 1}`}
             onChange={(e) => set(i, e.target.value)}
             className="block w-full rounded-md border border-gray-300 px-3 py-2 text-gray-900 focus:border-indigo-500 focus:outline-none focus:ring-indigo-500 sm:text-sm"
           />
@@ -41,6 +43,52 @@ function ImageUrlList({ value, onChange }: { value: string[]; onChange: (v: stri
         <PlusIcon className="h-4 w-4" /> Add image
       </button>
     </div>
+  )
+}
+
+// Controlled numeric input. A native <input type="number"> sanitizes any
+// intermediate value the user types ('-', '1.', '1e') to '' before React's
+// onChange can read it, which made it impossible to type negatives/decimals or
+// to clear the field (parseFloat('') -> NaN was snapped to 0). Instead we keep
+// the user's RAW STRING in local state while editing, mirror the parent value
+// when idle, and commit only a finite parsed number upstream — never snapping
+// in-progress input to 0. Rendered as type="text" + inputMode="decimal" so the
+// raw keystrokes survive; name/id/min/max/step/readOnly are preserved.
+function NumberInput({ field, value, onChange }: { field: Field; value: unknown; onChange: (value: unknown) => void }) {
+  const required = !!(field.required || field.formRequired)
+  const toStr = (v: unknown) => (v === null || v === undefined || v === '' ? '' : String(v))
+  const [raw, setRaw] = useState<string>(() => toStr(value))
+  const [editing, setEditing] = useState(false)
+
+  const handleChange = (next: string) => {
+    setRaw(next)
+    if (next === '') return onChange(field.emptyAsNull ? null : 0)
+    const n = parseFloat(next)
+    if (Number.isFinite(n)) onChange(n)
+    // else: intermediate input ('-', '1.', '1e') — hold the raw string, don't
+    // commit, and never snap to 0.
+  }
+
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      id={field.name}
+      name={field.name}
+      required={required}
+      min={field.min}
+      max={field.max}
+      step={field.step}
+      readOnly={field.readOnly}
+      value={editing ? raw : toStr(value)}
+      onFocus={() => {
+        setRaw(toStr(value))
+        setEditing(true)
+      }}
+      onBlur={() => setEditing(false)}
+      onChange={(e) => handleChange(e.target.value)}
+      className={BASE + (field.readOnly ? ' bg-gray-100' : '')}
+    />
   )
 }
 
@@ -68,18 +116,7 @@ export function FieldInput({ field, value, onChange, form, setForm }: Props) {
           onChange={(e) => onChange(e.target.value)} className={BASE} />
       )
     case 'number':
-      return (
-        <input type="number" id={field.name} name={field.name} required={required}
-          min={field.min} max={field.max} step={field.step} readOnly={field.readOnly}
-          value={value === null || value === undefined || value === '' ? '' : (value as number)}
-          onChange={(e) => {
-            const raw = e.target.value
-            if (field.emptyAsNull && raw === '') return onChange(null)
-            const n = parseFloat(raw)
-            onChange(Number.isNaN(n) ? 0 : n)
-          }}
-          className={BASE + (field.readOnly ? ' bg-gray-100' : '')} />
-      )
+      return <NumberInput field={field} value={value} onChange={onChange} />
     case 'textarea':
     case 'markdown':
       return (
@@ -108,7 +145,7 @@ export function FieldInput({ field, value, onChange, form, setForm }: Props) {
       )
     }
     case 'images':
-      return <ImageUrlList value={(value as string[]) ?? ['']} onChange={onChange} />
+      return <ImageUrlList value={(value as string[]) ?? ['']} onChange={onChange} label={field.label ?? humanize(field.name)} />
     default:
       return null
   }

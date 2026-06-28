@@ -13,8 +13,13 @@ export const validateTOTPCode = (code: string, secret: string): ValidationResult
     if (!secret) return { isValid: false, error: 'Authentication key not configured' }
     if (!/^\d{6}$/.test(code)) return { isValid: false, error: 'Code must be 6 digits' }
 
-    authenticator.options = { window: 1, step: 30, digits: 6 }
-    const isValid = authenticator.verify({ token: code, secret })
+    // Scope the verify options to a throwaway cloned instance instead of mutating
+    // the shared global authenticator.options (which would leak/persist across
+    // calls). clone() carries over the preset's crypto plugins; create() would
+    // drop them. Behavior is identical: 30s step, 1-step window, 6 digits.
+    const isValid = authenticator
+      .clone({ window: 1, step: 30, digits: 6 })
+      .verify({ token: code, secret })
     return { isValid, error: isValid ? undefined : 'Invalid code' }
   } catch (error) {
     return { isValid: false, error: (error as Error).message }

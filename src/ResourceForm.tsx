@@ -3,7 +3,7 @@
 import { useState, type FormEvent } from 'react'
 import type { DefinedResource } from './resource'
 import type { Field } from './field'
-import { humanize } from './field'
+import { humanize, optionValues } from './field'
 import { isValidImageUrl } from './imageUtils'
 import { FieldInput } from './FieldInput'
 
@@ -20,6 +20,15 @@ function resolveDefault(field: Field): unknown {
       return false
     case 'images':
       return ['']
+    case 'select': {
+      // A required select left at '' would display its first option (browser
+      // default) while state holds '' — a controlled/display mismatch. Seed the
+      // first non-empty option so state matches what the user is shown.
+      if (field.required || field.formRequired) {
+        return optionValues(field.options).find((v) => v !== '') ?? ''
+      }
+      return ''
+    }
     default:
       return ''
   }
@@ -82,15 +91,34 @@ export function ResourceForm({
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
       <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-        {formFields.map((f) => (
-          <div key={f.name} className={f.fullWidth ? 'md:col-span-2' : ''}>
-            <label htmlFor={f.name} className="block text-sm font-medium text-gray-700">
-              {f.label ?? humanize(f.name)}
-            </label>
-            <FieldInput field={f} value={form[f.name]} onChange={(v) => setValue(f.name, v)} form={form} setForm={patchForm} />
-            {f.help && <p className="mt-1 text-xs text-gray-500">{f.help}</p>}
-          </div>
-        ))}
+        {formFields.map((f) => {
+          const labelText = f.label ?? humanize(f.name)
+          const control = (
+            <>
+              <FieldInput field={f} value={form[f.name]} onChange={(v) => setValue(f.name, v)} form={form} setForm={patchForm} />
+              {f.help && <p className="mt-1 text-xs text-gray-500">{f.help}</p>}
+            </>
+          )
+          return (
+            <div key={f.name} className={f.fullWidth ? 'md:col-span-2' : ''}>
+              {f.type === 'images' ? (
+                // A multi-input field has no single control to bind a <label> to,
+                // so name the whole group with a <fieldset>/<legend>.
+                <fieldset className="m-0 min-w-0 border-0 p-0">
+                  <legend className="block text-sm font-medium text-gray-700">{labelText}</legend>
+                  {control}
+                </fieldset>
+              ) : (
+                <>
+                  <label htmlFor={f.name} className="block text-sm font-medium text-gray-700">
+                    {labelText}
+                  </label>
+                  {control}
+                </>
+              )}
+            </div>
+          )
+        })}
       </div>
       <div className="flex justify-end gap-3">
         <button type="button" onClick={onCancel} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">

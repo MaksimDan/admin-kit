@@ -1,7 +1,9 @@
 // Ambient augmentation of next-auth with the admin role + absolute-expiry fields
 // the kit's auth uses. This is a module (the type import makes it one), so the
 // `declare module` blocks MERGE with next-auth's types. The kit's entry points
-// import this for its side effect, so any consumer of the package picks it up
+// `import './augment'`, but this file is type-only: it declares ambient types and
+// compiles to nothing (no runtime side effect). The import simply pulls these
+// declarations into the type graph, so any consumer of the package picks them up
 // without writing their own next-auth.d.ts.
 import type { DefaultSession, DefaultUser } from 'next-auth'
 

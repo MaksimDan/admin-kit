@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { ObjectId } from 'mongodb'
 import { getClientPromise, getDbName, requireAdmin } from './config'
-import { parseJsonBody, validate, parsePagination, invalidObjectIdResponse } from './validation'
+import { parseJsonBody, validate, parsePagination, invalidObjectIdResponse, MAX_PAGE_LIMIT } from './validation'
 import type { DefinedResource } from './resource'
 
 // The generic GET/POST/PATCH/DELETE factory. crud(resource) returns Next.js route
@@ -14,12 +14,24 @@ export function crud(r: DefinedResource) {
   const getDb = async () => (await getClientPromise()).db(getDbName())
   const getCol = async () => (await getDb()).collection(r.collection ?? r.name)
   const persistKeys = r.fields.filter((f) => f.persist !== false).map((f) => f.name)
-  const pickSet = (body: Record<string, unknown>): Record<string, unknown> =>
-    Object.fromEntries(persistKeys.map((k) => [k, body[k]]))
+  // Build the default $set: only persisted keys actually PRESENT in the raw body
+  // (so PATCH is genuinely partial and omitted optionals aren't nulled), taking
+  // each value from the parsed/coerced object when present, else the raw body.
+  const pickSet = (
+    body: Record<string, unknown>,
+    parsed?: Record<string, unknown>,
+  ): Record<string, unknown> =>
+    Object.fromEntries(
+      persistKeys
+        .filter((k) => k in body)
+        .map((k) => [k, parsed && k in parsed ? parsed[k] : body[k]]),
+    )
 
   async function GET(req: Request) {
     try {
-      if (r.list?.public === false) {
+      // Secure by default: GET requires admin UNLESS the resource explicitly opts
+      // into a public listing with list.public === true.
+      if (r.list?.public !== true) {
         const authError = await requireAdmin()
         if (authError) return authError
       }
@@ -38,9 +50,10 @@ export function crud(r: DefinedResource) {
       let cursor = col.find(r.list?.filter ? r.list.filter(sp) : {})
       if (r.list?.sort !== null) cursor = cursor.sort(r.list?.sort ?? { createdAt: -1 })
       if (r.list?.paginate) {
+        // Default-on cap: a paginated resource can never dump the whole collection,
+        // even when the client gives no/invalid limit.
         const { limit, offset } = parsePagination(sp)
-        if (offset) cursor = cursor.skip(offset)
-        if (limit) cursor = cursor.limit(limit)
+        cursor = cursor.skip(offset ?? 0).limit(limit ?? MAX_PAGE_LIMIT)
       }
       const docs = await cursor.toArray()
       return NextResponse.json(r.hooks?.mapRead ? docs.map(r.hooks.mapRead) : docs)
@@ -58,11 +71,11 @@ export function crud(r: DefinedResource) {
       if (bodyError) return bodyError
       const body = data as Record<string, unknown>
 
-      const { error: validationError } = validate(r.schema, body)
+      const { data: parsed, error: validationError } = validate(r.schema, body)
       if (validationError) return validationError
 
       const col = await getCol()
-      const defaults = pickSet(body)
+      const defaults = pickSet(body, parsed as Record<string, unknown>)
       let setDoc: Record<string, unknown>
       if (r.hooks?.buildWrite) {
         const patch = await r.hooks.buildWrite({ mode: 'create', body, existing: null, defaults, db: await getDb() })
@@ -78,7 +91,7 @@ export function crud(r: DefinedResource) {
 
       const responseBody = r.hooks?.mapCreateResponse
         ? r.hooks.mapCreateResponse({ insertedId: result.insertedId, body, doc: toInsert })
-        : { _id: result.insertedId, ...body, createdAt: new Date(), updatedAt: new Date() }
+        : { _id: result.insertedId, ...toInsert }
       return NextResponse.json(responseBody)
     } catch (error) {
       console.error(`Error creating ${r.name}:`, error)
@@ -96,14 +109,14 @@ export function crud(r: DefinedResource) {
       if (bodyError) return bodyError
       const body = data as Record<string, unknown> & { _id?: string }
 
-      const { error: validationError } = validate(r.schema, body)
+      const { data: parsed, error: validationError } = validate(r.schema, body)
       if (validationError) return validationError
       const idError = invalidObjectIdResponse(body._id)
       if (idError) return idError
 
       const col = await getCol()
       const _id = new ObjectId(body._id!)
-      const defaults = pickSet(body)
+      const defaults = pickSet(body, parsed as Record<string, unknown>)
 
       let setDoc: Record<string, unknown>
       let unset: string[] | undefined

@@ -1,6 +1,6 @@
 'use client'
 
-import { useId } from 'react'
+import { useId, useRef } from 'react'
 import { TrashIcon } from 'lucide-react'
 import { useFocusTrap } from './useFocusTrap'
 
@@ -24,7 +24,11 @@ export const DeleteConfirmationModal = ({
 }: DeleteConfirmationModalProps) => {
   const titleId = useId()
   const descriptionId = useId()
-  const containerRef = useFocusTrap<HTMLDivElement>(isOpen, onClose)
+  // Default focus to Cancel, not the destructive Delete button. Without this the
+  // trap focuses the first focusable element, which is Delete (it precedes
+  // Cancel in the DOM for the reversed visual order) — one Enter from deleting.
+  const cancelRef = useRef<HTMLButtonElement>(null)
+  const containerRef = useFocusTrap<HTMLDivElement>(isOpen, onClose, cancelRef)
 
   if (!isOpen) return null
 
@@ -67,6 +71,7 @@ export const DeleteConfirmationModal = ({
               Delete
             </button>
             <button
+              ref={cancelRef}
               type="button"
               className="mt-3 inline-flex w-full justify-center rounded-md border border-gray-300 bg-white px-4 py-2 text-base font-medium text-gray-700 shadow-sm hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 sm:mt-0 sm:w-auto sm:text-sm"
               onClick={onClose}

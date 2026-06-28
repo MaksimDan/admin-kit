@@ -48,8 +48,16 @@ describe('parseJsonBody', () => {
 
 describe('validate', () => {
   const schema = z.object({ title: z.string().min(1, 'Title is required') })
-  it('passes valid data with no error', () => {
-    expect(validate(schema, { title: 'x' }).error).toBeUndefined()
+  it('passes valid data with no error and returns the parsed data', () => {
+    const { error, data } = validate(schema, { title: 'x' })
+    expect(error).toBeUndefined()
+    expect(data).toEqual({ title: 'x' })
+  })
+  it('returns coerced data on success', () => {
+    const coerce = z.object({ n: z.coerce.number() })
+    const { error, data } = validate(coerce, { n: '5' })
+    expect(error).toBeUndefined()
+    expect(data).toEqual({ n: 5 })
   })
   it('returns 400 with field details on invalid data', async () => {
     const { error } = validate(schema, {})

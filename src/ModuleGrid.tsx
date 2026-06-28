@@ -1,6 +1,6 @@
 'use client'
 
-import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { Inbox, Wrench, Car, BookOpen, ShoppingBag, type LucideIcon } from 'lucide-react'
 import type { ResourceCard } from './resource'
 
@@ -19,16 +19,15 @@ const COLORS: Record<string, { box: string; icon: string; cta: string }> = {
 // Data-driven dashboard card grid. A site's dashboard renders
 // <ModuleGrid modules={allResources.map(r => r.card)} />.
 export function ModuleGrid({ modules }: { modules: ResourceCard[] }) {
-  const router = useRouter()
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
       {modules.map((m) => {
         const Icon = ICONS[m.icon] ?? Inbox
         const c = COLORS[m.colorClass] ?? COLORS.blue
         return (
-          <div
+          <Link
             key={m.href}
-            onClick={() => router.push(m.href)}
+            href={m.href}
             className="bg-white shadow rounded-lg p-6 hover:shadow-md transition-shadow cursor-pointer group"
           >
             <div className="flex items-center gap-4 mb-4">
@@ -42,7 +41,7 @@ export function ModuleGrid({ modules }: { modules: ResourceCard[] }) {
               <span>{m.cta}</span>
               <Icon className="ml-2 h-4 w-4" />
             </div>
-          </div>
+          </Link>
         )
       })}
     </div>

@@ -60,13 +60,14 @@ export async function parseJsonBody(
   }
 }
 
-// Validates `data` against `schema`; returns a 400 with field details on failure.
-export function validate(schema: z.ZodTypeAny, data: unknown): { error?: NextResponse } {
+// Validates `data` against `schema`; returns a 400 with field details on failure,
+// otherwise returns the parsed (coerced/transformed) data so callers can persist it.
+export function validate(schema: z.ZodTypeAny, data: unknown): { error?: NextResponse; data?: unknown } {
   const result = schema.safeParse(data)
   if (!result.success) {
     const details = result.error.issues.map((i) => ({ field: i.path.join('.'), message: i.message }))
     const summary = details.map((d) => (d.field ? `${d.field}: ${d.message}` : d.message)).join('; ')
     return { error: NextResponse.json({ error: summary || 'Validation failed', details }, { status: 400 }) }
   }
-  return {}
+  return { data: result.data }
 }

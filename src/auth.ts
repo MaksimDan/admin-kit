@@ -1,9 +1,16 @@
+import { createHash, timingSafeEqual } from 'node:crypto'
 import type { AuthOptions } from 'next-auth'
 import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
 import CredentialsProvider from 'next-auth/providers/credentials'
 import { rateLimit, clientIpFromHeaders } from './rateLimit'
 import { validateTOTPCode } from './totp'
+
+// Constant-time string equality: hash both sides to a fixed 32-byte digest so the
+// lengths always match (timingSafeEqual throws on length mismatch) and the compare
+// itself does not short-circuit on the first differing byte.
+const constantTimeEqual = (a: string, b: string): boolean =>
+  timingSafeEqual(createHash('sha256').update(a, 'utf8').digest(), createHash('sha256').update(b, 'utf8').digest())
 
 // Single env-based admin auth, packaged. createAdminAuth() returns the next-auth
 // authOptions (mount it in your [...nextauth] route) plus requireAdmin/isAdminUser
@@ -32,9 +39,20 @@ export function createAdminAuth(config: AdminAuthConfig): AdminAuth {
   if (!config.adminEmail || !config.adminPassword) {
     throw new Error('admin-kit: createAdminAuth requires adminEmail and adminPassword')
   }
+  if (!config.totpSecret) {
+    throw new Error('admin-kit: createAdminAuth requires totpSecret')
+  }
 
-  const ttlSeconds = config.sessionTtlSeconds ?? 30 * 60
+  // Only honour a positive ttl; 0 / negative / non-number falls back to 30 min.
+  const ttlSeconds =
+    typeof config.sessionTtlSeconds === 'number' && config.sessionTtlSeconds > 0
+      ? config.sessionTtlSeconds
+      : 30 * 60
   const ttlMs = ttlSeconds * 1000
+
+  // Replay guard: a TOTP code is single-use within this process. Holds the last
+  // code that successfully authenticated so an immediate reuse is rejected.
+  let lastAcceptedTotp: string | null = null
 
   const authOptions: AuthOptions = {
     providers: [
@@ -56,13 +74,23 @@ export function createAdminAuth(config: AdminAuthConfig): AdminAuth {
           if (!credentials?.email || !credentials?.password || !credentials?.totp) {
             return null
           }
-          if (credentials.email !== config.adminEmail || credentials.password !== config.adminPassword) {
+          // Constant-time, non-short-circuiting compare of BOTH factors (compute
+          // each before branching) so neither timing nor evaluation order leaks
+          // which field was wrong. Uniform null on any mismatch.
+          const emailOk = constantTimeEqual(credentials.email, config.adminEmail)
+          const passOk = constantTimeEqual(credentials.password, config.adminPassword)
+          if (!emailOk || !passOk) {
             return null
           }
           // Third factor: TOTP. No session is issued unless this passes.
           if (!validateTOTPCode(credentials.totp, config.totpSecret).isValid) {
             return null
           }
+          // Reject reuse of an already-accepted code; otherwise record it.
+          if (credentials.totp === lastAcceptedTotp) {
+            return null
+          }
+          lastAcceptedTotp = credentials.totp
 
           return { id: '1', email: credentials.email, role: 'admin' }
         },
@@ -84,6 +112,12 @@ export function createAdminAuth(config: AdminAuthConfig): AdminAuth {
           // refreshed on later reads, so the window does not slide.
           token.role = user.role
           token.expiresAt = Date.now() + ttlMs
+        } else if (typeof token.expiresAt === 'number' && Date.now() >= token.expiresAt) {
+          // LATER READS: once past the absolute deadline, strip the role from the
+          // raw token too (fail closed) so getToken()/middleware consumers that
+          // read the decoded JWT directly — not just the session callback — stop
+          // seeing 'admin'.
+          token.role = null
         }
         return token
       },

@@ -23,6 +23,9 @@ describe('createAdminAuth — config', () => {
   it('throws without admin credentials', () => {
     expect(() => createAdminAuth({ adminEmail: '', adminPassword: '', totpSecret: 's', nextAuthSecret: 'x' })).toThrow()
   })
+  it('throws without a totpSecret', () => {
+    expect(() => createAdminAuth({ adminEmail: 'a', adminPassword: 'b', totpSecret: '', nextAuthSecret: 'x' })).toThrow()
+  })
 })
 
 describe('jwt callback — absolute deadline stamped once at login', () => {
@@ -36,6 +39,17 @@ describe('jwt callback — absolute deadline stamped once at login', () => {
     const fixed = Date.now() + 5000
     const out = await jwtCb({ token: { role: 'admin', expiresAt: fixed }, user: undefined })
     expect(out.expiresAt).toBe(fixed)
+  })
+})
+
+describe('jwt callback — fails closed on the raw token past the deadline', () => {
+  it('strips role on a later read once expiresAt is in the PAST', async () => {
+    const out = await jwtCb({ token: { role: 'admin', expiresAt: Date.now() - 1 }, user: undefined })
+    expect(out.role).toBeNull()
+  })
+  it('keeps role on a later read while expiresAt is in the FUTURE', async () => {
+    const out = await jwtCb({ token: { role: 'admin', expiresAt: Date.now() + 60_000 }, user: undefined })
+    expect(out.role).toBe('admin')
   })
 })
 
@@ -73,5 +87,27 @@ describe('authorize — email + password + valid TOTP', () => {
   it('null when TOTP missing', async () => {
     const user = await authorize({ email: 'admin@test.local', password: 'correct-horse' }, req('203.0.113.33'))
     expect(user).toBeNull()
+  })
+})
+
+describe('authorize — TOTP replay guard', () => {
+  // Fresh instance so the replay state is isolated from the other authorize tests.
+  const s = authenticator.generateSecret()
+  const { authOptions: opts } = createAdminAuth({
+    adminEmail: 'admin@test.local',
+    adminPassword: 'correct-horse',
+    totpSecret: s,
+    nextAuthSecret: 'test-secret',
+  })
+  const pc = opts.providers[0] as any
+  const authz = (pc.options?.authorize ?? pc.authorize) as (c: any, r: any) => Promise<any>
+  const req = (ip: string) => ({ headers: { 'x-forwarded-for': ip } })
+
+  it('rejects the same TOTP code on the second authorize', async () => {
+    const code = authenticator.generate(s)
+    const first = await authz({ email: 'admin@test.local', password: 'correct-horse', totp: code }, req('203.0.113.40'))
+    expect(first).toMatchObject({ role: 'admin' })
+    const second = await authz({ email: 'admin@test.local', password: 'correct-horse', totp: code }, req('203.0.113.41'))
+    expect(second).toBeNull()
   })
 })

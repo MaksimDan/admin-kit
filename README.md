@@ -10,14 +10,48 @@ config + a few one-line wrappers.
 ## Install
 
 It ships as raw TypeScript (no build step) and is compiled by the consuming app
-via `transpilePackages`. Add it as a git dependency:
+via `transpilePackages`. Pin it to a **content-addressed HTTPS tarball** by commit
+SHA:
 
 ```jsonc
 // package.json
 "dependencies": {
-  "@maksimdan/admin-kit": "github:MaksimDan/admin-kit#v0.1.0"
+  "@maksimdan/admin-kit": "https://github.com/MaksimDan/admin-kit/archive/COMMIT_SHA.tar.gz"
 }
 ```
+
+Replace `COMMIT_SHA` with the full 40-char SHA of the commit you want — the latest
+commit on `main`, or the commit a release tag points at.
+
+**Why a SHA tarball and not `github:MaksimDan/admin-kit#v0.1.0`?** npm rewrites
+`github:owner/repo#ref` into a `git+ssh://` URL, which needs an SSH key. Vercel and
+most CI runners don't have one, so the install fails — this caused a real
+production build outage. The HTTPS `archive/<sha>.tar.gz` URL is **keyless** (plain
+HTTPS, no SSH or credentials) and **content-addressed**: a given SHA always
+resolves to the same bytes, so the install is cache-safe and byte-for-byte
+identical on your laptop, in CI, and on Vercel.
+
+**Upgrading:** bump the SHA in the URL to a newer commit and reinstall. Because the
+URL is content-addressed, npm only refetches when the SHA changes.
+
+## Consumer requirements
+
+The kit ships raw TypeScript and is compiled by **your** app, so your project's
+config has to be able to build it:
+
+- **`tsconfig.json`** — `moduleResolution: "bundler"` (or `"node16"` / `"nodenext"`)
+  so the subpath exports (`/server`, `/image`, `/mongo`) resolve, plus
+  `"jsx": "preserve"`, `"strict": true`, and `"skipLibCheck": true`.
+- **`next.config`** — `transpilePackages: ['@maksimdan/admin-kit']` so Next compiles
+  the kit's TS, and — if you render the image placeholder on public pages — a
+  `next/image` `remotePatterns` entry for `placehold.co`, the `PLACEHOLDER_IMAGE`
+  host:
+  ```js
+  const nextConfig = {
+    transpilePackages: ['@maksimdan/admin-kit'],
+    images: { remotePatterns: [{ protocol: 'https', hostname: 'placehold.co' }] },
+  }
+  ```
 
 ## Integrate (once per site)
 
@@ -34,7 +68,8 @@ via `transpilePackages`. Add it as a git dependency:
    ```ts
    // src/lib/admin-kit-setup.ts
    import { createAdminAuth, configureAdminKit } from '@maksimdan/admin-kit/server'
-   import clientPromise from '@/lib/mongodb'
+   import { createClientPromise } from '@maksimdan/admin-kit/mongo'
+   const clientPromise = createClientPromise() // HMR-safe Mongo singleton; reads MONGODB_URI
    export const { authOptions, requireAdmin } = createAdminAuth({
      adminEmail: process.env.ADMIN_EMAIL!,
      adminPassword: process.env.ADMIN_PASSWORD!,
@@ -123,9 +158,23 @@ export const vehiclesResource: DefinedResource = {
 
 ## Entry points
 
-- `@maksimdan/admin-kit` — client-safe: `defineResource`, field model, `ResourcePage`,
-  `ResourceForm`, `ResourceTable`, `ModuleGrid`, UI primitives, image helpers.
-- `@maksimdan/admin-kit/server` — server: `crud`, `configureAdminKit`, request helpers.
+- **`@maksimdan/admin-kit`** (`.`) — the **client barrel** (client-safe +
+  isomorphic): `defineResource` + the field model, all the admin UI
+  (`ResourcePage`, `ResourceForm`, `ResourceTable`, `ModuleGrid`, UI primitives),
+  `LoginForm`, `SessionCountdown`, and the image helpers. Import this from client
+  components and from your site config.
+- **`@maksimdan/admin-kit/server`** (`/server`) — **server only** (pulls in
+  `mongodb` / `next/server`): `crud`, `createAdminAuth`, `configureAdminKit`, the
+  request helpers (`parseJsonBody`, `validate`, `parsePagination`,
+  `invalidObjectIdResponse`), and `rateLimit` + `clientIpFromHeaders`. Import only
+  from route files and your one-time setup module — never a client component.
+- **`@maksimdan/admin-kit/image`** (`/image`) — just the image-URL helpers
+  (`getValidImageUrl`, `isValidImageUrl`, `PLACEHOLDER_IMAGE`). Import these in your
+  **public / marketing** pages instead of the main barrel, so you don't pull the
+  admin UI into public bundles.
+- **`@maksimdan/admin-kit/mongo`** (`/mongo`) — `createClientPromise()`, the
+  **HMR-safe MongoDB connection singleton** (one client per process; reuses the
+  connection across dev hot-reloads). Feed its result to `configureAdminKit`.
 
 ## The host contract
 
@@ -138,6 +187,14 @@ App-level pieces Next can't package stay in the app: the `[...nextauth]` route
 that mounts `authOptions`, `<SessionProvider>`, the route/layout/page files, env,
 and Tailwind config. `createAdminAuth` is configurable — pass
 `sessionTtlSeconds` to change the 30-minute default.
+
+## Releasing
+
+1. Bump `version` in `package.json` to match the tag you're about to cut.
+2. Commit the version bump.
+3. `git tag vX.Y.Z` (same version), then `git push origin main --tags`.
+4. Consumers upgrade by bumping their tarball SHA (see **Install**) to the new
+   commit — usually the one the tag points at.
 
 ## Peer dependencies
 

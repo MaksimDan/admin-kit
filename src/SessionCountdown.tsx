@@ -38,7 +38,11 @@ function formatRemaining(ms: number): string {
   return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
 }
 
-export function SessionCountdown() {
+interface SessionCountdownProps {
+  loginPath?: string
+}
+
+export function SessionCountdown({ loginPath = '/admin/login' }: SessionCountdownProps = {}) {
   const { data: session, status } = useSession()
   // Absolute, refetch-stable expiry. null while loading / unauthenticated.
   const expiry = status === 'authenticated' ? getExpiryMs(session) : null
@@ -47,8 +51,8 @@ export function SessionCountdown() {
 
   const reLogin = useCallback(() => {
     // Clears the cookie server-side, then routes to the login page.
-    void signOut({ callbackUrl: '/admin/login' })
-  }, [])
+    void signOut({ callbackUrl: loginPath })
+  }, [loginPath])
 
   useEffect(() => {
     if (expiry == null) {

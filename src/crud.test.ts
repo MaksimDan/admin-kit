@@ -9,11 +9,17 @@ const OID = '507f1f77bcf86cd799439011'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const cursor: any = { sort: () => cursor, skip: () => cursor, limit: () => cursor, toArray: async () => [] }
+// Records the last update operand passed to findOneAndUpdate so PATCH tests can
+// assert the exact $set shape (e.g. that omitted fields aren't nulled).
+let lastUpdate: any = null
 const collection = {
   find: () => cursor,
   findOne: async () => null,
   insertOne: async () => ({ insertedId: OID }),
-  findOneAndUpdate: async () => null,
+  findOneAndUpdate: async (_filter: any, update: any) => {
+    lastUpdate = update
+    return null
+  },
   deleteOne: async () => ({ deletedCount: 1 }),
   countDocuments: async () => 0,
 }
@@ -34,6 +40,7 @@ const req = (path: string, method = 'GET', body?: unknown) =>
 const widgets = defineResource({
   name: 'widgets',
   label: 'Widget',
+  list: { public: true },
   fields: [
     { name: 'name', type: 'text', required: true },
     { name: 'qty', type: 'number' },
@@ -54,12 +61,20 @@ describe('crud — standard resource', () => {
   it('POST validates the body (400 on missing required field)', async () => {
     expect((await POST(req('/api/widgets', 'POST', {}))).status).toBe(400)
   })
-  it('POST happy -> 200 with _id + body', async () => {
+  it('POST happy -> 200 with the stored doc (_id + persisted fields)', async () => {
     const res = await POST(req('/api/widgets', 'POST', { name: 'a', qty: 1 }))
     expect(res.status).toBe(200)
     const json = await res.json()
     expect(json._id).toBe(OID)
     expect(json.name).toBe('a')
+    expect(json.qty).toBe(1)
+  })
+  it('POST persists zod-coerced values (numeric string -> number)', async () => {
+    const res = await POST(req('/api/widgets', 'POST', { name: 'a', qty: '5' }))
+    expect(res.status).toBe(200)
+    const json = await res.json()
+    expect(json.qty).toBe(5)
+    expect(typeof json.qty).toBe('number')
   })
 
   it('PATCH validates before the id check (400 on bad body even with a bad id)', async () => {
@@ -70,6 +85,21 @@ describe('crud — standard resource', () => {
   })
   it('PATCH not found -> 404', async () => {
     expect((await PATCH(req('/api/widgets', 'PATCH', { name: 'a', _id: OID }))).status).toBe(404)
+  })
+  it('PATCH is partial — an omitted optional field is NOT written to $set (not nulled)', async () => {
+    lastUpdate = null
+    await PATCH(req('/api/widgets', 'PATCH', { name: 'a', _id: OID }))
+    expect(lastUpdate.$set.name).toBe('a')
+    // qty was omitted from the body, so it must be absent from $set rather than
+    // overwritten with null/0 (the pre-fix behaviour clobbered omitted fields).
+    expect('qty' in lastUpdate.$set).toBe(false)
+  })
+  it('PATCH writes (and coerces) the fields that ARE present', async () => {
+    lastUpdate = null
+    await PATCH(req('/api/widgets', 'PATCH', { name: 'a', qty: '7', _id: OID }))
+    expect(lastUpdate.$set.name).toBe('a')
+    expect(lastUpdate.$set.qty).toBe(7)
+    expect(typeof lastUpdate.$set.qty).toBe('number')
   })
 
   it('DELETE requires admin', async () => {
@@ -96,6 +126,20 @@ describe('crud — list.public: false (admin-only GET)', () => {
   it('200 when admin', async () => {
     admin()
     expect((await GET(req('/api/secret'))).status).toBe(200)
+  })
+})
+
+describe('crud — secure by default (GET admin-only without list.public: true)', () => {
+  // No list config at all => GET must require admin (intentional breaking change).
+  const plain = defineResource({ name: 'plain', label: 'Plain', fields: [] })
+  const { GET } = crud(plain)
+  it('401 when not admin', async () => {
+    notAdmin()
+    expect((await GET(req('/api/plain'))).status).toBe(401)
+  })
+  it('200 when admin', async () => {
+    admin()
+    expect((await GET(req('/api/plain'))).status).toBe(200)
   })
 })
 
