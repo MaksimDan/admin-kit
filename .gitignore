@@ -2,3 +2,9 @@
 *.tsbuildinfo
 .DS_Store
 npm-debug.log*
+
+# env files — never commit secrets. This is a library (env comes from the
+# consuming app), so there's normally no .env here; this is belt-and-suspenders.
+.env
+.env.*
+!.env.example
