@@ -15,3 +15,5 @@ export {
   MAX_PAGE_LIMIT,
   MAX_BODY_BYTES,
 } from './validation'
+export { rateLimit, clientIpFromHeaders } from './rateLimit'
+export type { RateLimitResult } from './rateLimit'
