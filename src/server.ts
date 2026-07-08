@@ -2,7 +2,7 @@
 // from your one-time setup module. Never from a client component.
 import './augment' // ambient next-auth type augmentation (role, expiresAt)
 
-export { crud } from './crud'
+export { crud, reorder } from './crud'
 export { configureAdminKit } from './config'
 export type { RequireAdminFn } from './config'
 export { createAdminAuth } from './auth'

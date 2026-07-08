@@ -48,7 +48,10 @@ export function crud(r: DefinedResource) {
       }
 
       let cursor = col.find(r.list?.filter ? r.list.filter(sp) : {})
-      if (r.list?.sort !== null) cursor = cursor.sort(r.list?.sort ?? { createdAt: -1 })
+      if (r.list?.sort !== null) {
+        const fallbackSort: Record<string, 1 | -1> = r.list?.orderField ? { [r.list.orderField]: 1 } : { createdAt: -1 }
+        cursor = cursor.sort(r.list?.sort ?? fallbackSort)
+      }
       if (r.list?.paginate) {
         // Default-on cap: a paginated resource can never dump the whole collection,
         // even when the client gives no/invalid limit.
@@ -164,4 +167,62 @@ export function crud(r: DefinedResource) {
   }
 
   return { GET, POST, PATCH, DELETE }
+}
+
+// Sanity bound on a single reorder call — far above any real curated list. Reorder
+// rewrites a DENSE 0..n-1 sequence, so the whole (unpaginated) list is expected in
+// one request; this only guards against a malformed/abusive payload.
+const MAX_REORDER = 5000
+
+// Reorder route factory for resources that declare list.orderField. The admin
+// table (ResourceTable) POSTs the full ordered list of _ids after a drag or an
+// up/down move; we write a dense 0..n-1 sequence to the order field in a single
+// bulkWrite. Dense reassignment keeps positions unique and gap-free with no manual
+// number entry and no uniqueness collisions to resolve. Mount at
+// /api/{name}/reorder:  export const { POST } = reorder(myResource)
+export function reorder(r: DefinedResource) {
+  const orderField = r.list?.orderField
+  const getCol = async () => (await getClientPromise()).db(getDbName()).collection(r.collection ?? r.name)
+
+  async function POST(req: Request) {
+    const authError = await requireAdmin()
+    if (authError) return authError
+    if (!orderField) {
+      return NextResponse.json({ error: `Reorder is not enabled for ${r.name}: set list.orderField.` }, { status: 400 })
+    }
+    try {
+      const { data, error: bodyError } = await parseJsonBody(req)
+      if (bodyError) return bodyError
+      const ids = (data as { ids?: unknown } | null)?.ids
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return NextResponse.json({ error: 'Body must be { ids: string[] } with at least one id.' }, { status: 400 })
+      }
+      if (ids.length > MAX_REORDER) {
+        return NextResponse.json({ error: `Cannot reorder more than ${MAX_REORDER} rows at once.` }, { status: 400 })
+      }
+      for (const id of ids) {
+        const idError = invalidObjectIdResponse(typeof id === 'string' ? id : null)
+        if (idError) return idError
+      }
+      if (new Set(ids as string[]).size !== ids.length) {
+        return NextResponse.json({ error: 'Duplicate ids in the reorder payload.' }, { status: 400 })
+      }
+
+      const now = new Date()
+      const col = await getCol()
+      const ops = (ids as string[]).map((id, index) => ({
+        updateOne: {
+          filter: { _id: new ObjectId(id) },
+          update: { $set: { [orderField]: index, updatedAt: now } },
+        },
+      }))
+      const result = await col.bulkWrite(ops, { ordered: false })
+      return NextResponse.json({ success: true, matched: result.matchedCount, modified: result.modifiedCount })
+    } catch (error) {
+      console.error(`Error reordering ${r.name}:`, error)
+      return NextResponse.json({ error: `Error reordering ${r.name}` }, { status: 500 })
+    }
+  }
+
+  return { POST }
 }

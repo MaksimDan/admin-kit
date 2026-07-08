@@ -95,6 +95,31 @@ export function ResourcePage({ resource }: { resource: DefinedResource }) {
     }
   }
 
+  // Reorder (only reachable when the resource declares list.orderField): apply the
+  // new order optimistically, then persist it to /api/{name}/reorder. Revert on
+  // failure so the table never diverges from the stored order.
+  const handleReorder = async (orderedIds: string[]) => {
+    const prev = rows
+    const byId = new Map(rows.map((r) => [String(r._id), r]))
+    const next = orderedIds.map((id) => byId.get(id)).filter((r): r is Row => Boolean(r))
+    setRows(next)
+    try {
+      const res = await fetch(`${endpoint}/reorder`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: orderedIds }),
+      })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}))
+        throw new Error(err.error || `Failed to reorder ${resource.label.toLowerCase()}`)
+      }
+    } catch (error) {
+      console.error(`Error reordering ${resource.name}:`, error)
+      setRows(prev)
+      alert(error instanceof Error ? error.message : 'An error occurred')
+    }
+  }
+
   return (
     <AdminGate session={session} isLoading={status === 'loading' || rowsLoading}>
       <div className="space-y-8">
@@ -118,7 +143,7 @@ export function ResourcePage({ resource }: { resource: DefinedResource }) {
             onAction={handleAddNew}
           />
         ) : (
-          <ResourceTable resource={resource} rows={rows} onEdit={handleEdit} onDelete={setToDelete} />
+          <ResourceTable resource={resource} rows={rows} onEdit={handleEdit} onDelete={setToDelete} onReorder={handleReorder} />
         )}
 
         <ModalShell isOpen={isModalOpen} onClose={closeModal} title={selected ? `Edit ${resource.label}` : `Add New ${resource.label}`}>

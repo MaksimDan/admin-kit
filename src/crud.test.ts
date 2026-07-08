@@ -2,16 +2,19 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import type { MongoClient } from 'mongodb'
 import { configureAdminKit } from './config'
-import { crud } from './crud'
+import { crud, reorder } from './crud'
 import { defineResource } from './resource'
 
 const OID = '507f1f77bcf86cd799439011'
+const OID2 = '507f1f77bcf86cd799439012'
+const OID3 = '507f1f77bcf86cd799439013'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 const cursor: any = { sort: () => cursor, skip: () => cursor, limit: () => cursor, toArray: async () => [] }
 // Records the last update operand passed to findOneAndUpdate so PATCH tests can
 // assert the exact $set shape (e.g. that omitted fields aren't nulled).
 let lastUpdate: any = null
+let lastBulk: any = null
 const collection = {
   find: () => cursor,
   findOne: async () => null,
@@ -22,6 +25,10 @@ const collection = {
   },
   deleteOne: async () => ({ deletedCount: 1 }),
   countDocuments: async () => 0,
+  bulkWrite: async (ops: any[]) => {
+    lastBulk = ops
+    return { matchedCount: ops.length, modifiedCount: ops.length }
+  },
 }
 const fakeClient = Promise.resolve({ db: () => ({ collection: () => collection }) } as unknown as MongoClient)
 
@@ -159,5 +166,50 @@ describe('crud — hooks', () => {
     const { POST } = crud({ ...r, hooks: { mapCreateResponse: ({ insertedId }) => ({ id: insertedId, ok: true }) } })
     const json = await (await POST(req('/api/r3', 'POST', { name: 'a' }))).json()
     expect(json).toEqual({ id: OID, ok: true })
+  })
+})
+
+describe('reorder — list.orderField', () => {
+  const ranked = defineResource({
+    name: 'ranked',
+    label: 'Ranked',
+    list: { public: true, orderField: 'position' },
+    fields: [{ name: 'name', type: 'text' }],
+  })
+  const { POST } = reorder(ranked)
+
+  it('requires admin', async () => {
+    notAdmin()
+    expect((await POST(req('/api/ranked/reorder', 'POST', { ids: [OID] }))).status).toBe(401)
+  })
+
+  it('writes a dense 0..n-1 sequence to the order field in submitted order', async () => {
+    lastBulk = null
+    const res = await POST(req('/api/ranked/reorder', 'POST', { ids: [OID2, OID, OID3] }))
+    expect(res.status).toBe(200)
+    expect(lastBulk).toHaveLength(3)
+    expect(lastBulk.map((o: any) => o.updateOne.update.$set.position)).toEqual([0, 1, 2])
+    expect(lastBulk.map((o: any) => String(o.updateOne.filter._id))).toEqual([OID2, OID, OID3])
+    // every write also bumps updatedAt
+    expect(lastBulk[0].updateOne.update.$set.updatedAt).toBeInstanceOf(Date)
+  })
+
+  it('400 when the resource has no orderField', async () => {
+    const plain = defineResource({ name: 'plain2', label: 'Plain2', list: { public: true }, fields: [] })
+    const res = await reorder(plain).POST(req('/api/plain2/reorder', 'POST', { ids: [OID] }))
+    expect(res.status).toBe(400)
+  })
+
+  it('400 on empty / missing ids', async () => {
+    expect((await POST(req('/api/ranked/reorder', 'POST', { ids: [] }))).status).toBe(400)
+    expect((await POST(req('/api/ranked/reorder', 'POST', {}))).status).toBe(400)
+  })
+
+  it('400 on an invalid ObjectId in the list', async () => {
+    expect((await POST(req('/api/ranked/reorder', 'POST', { ids: [OID, 'nope'] }))).status).toBe(400)
+  })
+
+  it('400 on duplicate ids', async () => {
+    expect((await POST(req('/api/ranked/reorder', 'POST', { ids: [OID, OID] }))).status).toBe(400)
   })
 })

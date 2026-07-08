@@ -27,9 +27,13 @@ export interface CreateRespCtx {
 export interface ListConfig {
   public?: boolean // default true; false => GET requires admin (leads)
   byId?: boolean // default false; true => GET ?id= returns a single doc (vehicles)
-  sort?: Record<string, 1 | -1> | null // default {createdAt:-1}; null => no .sort()
+  sort?: Record<string, 1 | -1> | null // default {createdAt:-1} (or {[orderField]:1} when orderField set); null => no .sort()
   paginate?: boolean // default false; true => apply parsePagination (vehicles/blogs)
   filter?: (sp: URLSearchParams) => Record<string, unknown> // products activeOnly, blogs status=published
+  // When set, the admin table is drag-reorderable and reorder() persists a dense
+  // 0..n-1 sequence to this field. Opt-in per resource; pair with a curated
+  // (non-paginated) list. GET falls back to sorting by this field when sort is unset.
+  orderField?: string
 }
 
 export interface ResourceHooks {
