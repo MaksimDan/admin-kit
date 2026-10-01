@@ -90,6 +90,54 @@ describe('authorize — email + password + valid TOTP', () => {
   })
 })
 
+describe('authorize — wrong-code lockout', () => {
+  // A fresh instance per test so its failure counter starts at zero.
+  const instance = (extra: Partial<Parameters<typeof createAdminAuth>[0]> = {}) => {
+    const s = authenticator.generateSecret()
+    const { authOptions: opts } = createAdminAuth({
+      adminEmail: 'admin@test.local',
+      adminPassword: 'correct-horse',
+      totpSecret: s,
+      nextAuthSecret: 'test-secret',
+      ...extra,
+    })
+    const pc = opts.providers[0] as any
+    const authz = (pc.options?.authorize ?? pc.authorize) as (c: any, r: any) => Promise<any>
+    return { s, authz }
+  }
+  const req = (ip: string) => ({ headers: { 'x-forwarded-for': ip } })
+  // Never the current code: a valid code shifted by one.
+  const wrongCode = (s: string) => String((Number(authenticator.generate(s)) + 1) % 1_000_000).padStart(6, '0')
+
+  it('10 wrong codes after the right password lock out even a right code, whatever the IP', async () => {
+    const { s, authz } = instance()
+    for (let i = 0; i < 10; i++) {
+      expect(await authz({ email: 'admin@test.local', password: 'correct-horse', totp: wrongCode(s) }, req(`198.51.100.${i}`))).toBeNull()
+    }
+    const right = await authz({ email: 'admin@test.local', password: 'correct-horse', totp: authenticator.generate(s) }, req('198.51.100.200'))
+    expect(right).toBeNull()
+  })
+
+  it('wrong passwords do not count, so they cannot lock the admin out', async () => {
+    const { s, authz } = instance()
+    for (let i = 0; i < 20; i++) {
+      expect(await authz({ email: 'admin@test.local', password: 'guess', totp: wrongCode(s) }, req(`198.51.101.${i}`))).toBeNull()
+    }
+    const right = await authz({ email: 'admin@test.local', password: 'correct-horse', totp: authenticator.generate(s) }, req('198.51.101.200'))
+    expect(right).toMatchObject({ role: 'admin' })
+  })
+
+  it('a custom clientIp decides what the per-IP limit keys on', async () => {
+    const { s, authz } = instance({ clientIp: () => 'one-proxy-ip' })
+    for (let i = 0; i < 10; i++) {
+      await authz({ email: 'admin@test.local', password: 'guess', totp: '000000' }, req(`198.51.102.${i}`))
+    }
+    // The X-Forwarded-For value differs, but the configured IP is over its limit.
+    const right = await authz({ email: 'admin@test.local', password: 'correct-horse', totp: authenticator.generate(s) }, req('198.51.102.200'))
+    expect(right).toBeNull()
+  })
+})
+
 describe('authorize — TOTP replay guard', () => {
   // Fresh instance so the replay state is isolated from the other authorize tests.
   const s = authenticator.generateSecret()

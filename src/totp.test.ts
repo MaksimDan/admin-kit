@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { validateTOTPCode, generateTOTPSecret, generateTOTPCode } from './totp'
+import { validateTOTPCode, generateTOTPSecret, generateTOTPCode, totpKeyUri } from './totp'
 
 describe('totp', () => {
   it('validates a freshly generated code for the same secret', () => {
@@ -18,5 +18,11 @@ describe('totp', () => {
   })
   it('rejects when no secret is configured', () => {
     expect(validateTOTPCode('123456', '').isValid).toBe(false)
+  })
+  it('builds the otpauth URI an authenticator app enrolls from', () => {
+    const uri = totpKeyUri('admin@example.com', 'Example Admin', 'JBSWY3DPEHPK3PXP')
+    expect(uri.startsWith('otpauth://totp/')).toBe(true)
+    expect(uri).toContain('secret=JBSWY3DPEHPK3PXP')
+    expect(uri).toContain('issuer=Example%20Admin')
   })
 })

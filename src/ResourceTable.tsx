@@ -78,7 +78,16 @@ export function ResourceTable({
                   dropAbove ? 'border-t-2 border-indigo-400' : dropBelow ? 'border-b-2 border-indigo-400' : ''
                 }`}
                 draggable={reorderable || undefined}
-                onDragStart={reorderable ? () => setDragIndex(index) : undefined}
+                onDragStart={
+                  reorderable
+                    ? (e) => {
+                        // Older Firefox won't start a drag that carries no data.
+                        e.dataTransfer.effectAllowed = 'move'
+                        e.dataTransfer.setData('text/plain', String(row._id))
+                        setDragIndex(index)
+                      }
+                    : undefined
+                }
                 onDragOver={
                   reorderable
                     ? (e) => {

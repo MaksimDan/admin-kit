@@ -48,7 +48,10 @@ export function rateLimit(key: string, limit: number, windowMs: number): RateLim
 }
 
 // Best-effort client IP from forwarded headers. Accepts a web Headers object or
-// the plain header record next-auth passes to authorize().
+// the plain header record next-auth passes to authorize(). It trusts the first
+// X-Forwarded-For entry, which is the real client only when a proxy in front
+// overwrites that header (Vercel does). Behind a proxy that appends to it
+// (nginx's $proxy_add_x_forwarded_for) or with no proxy, the client chooses it.
 export function clientIpFromHeaders(
   headers: Headers | Record<string, string | string[] | undefined> | undefined,
 ): string {

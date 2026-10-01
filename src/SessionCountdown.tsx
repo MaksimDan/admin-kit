@@ -12,7 +12,7 @@ const WARNING_THRESHOLD_MS = 2 * 60 * 1000
  * Resolve the session's ABSOLUTE expiry as epoch-milliseconds.
  *
  * Prefer `session.expiresAt` — a login-anchored timestamp injected by the auth
- * `session` callback (see src/lib/auth.ts + types/next-auth.d.ts). Do NOT depend
+ * `session` callback (see auth.ts; the type comes from augment.ts). Do NOT depend
  * on the built-in `session.expires`: next-auth (v4, JWT strategy) recomputes it
  * as `now + maxAge` on every session fetch, so it rolls forward and the timer
  * would never tick down. We deliberately do NOT fall back to it.

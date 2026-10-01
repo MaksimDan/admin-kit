@@ -1,13 +1,15 @@
 'use client'
 
-import { useId, useRef } from 'react'
+import { useId, useRef, useState } from 'react'
 import { TrashIcon } from 'lucide-react'
 import { useFocusTrap } from './useFocusTrap'
 
 interface DeleteConfirmationModalProps {
   isOpen: boolean
   onClose: () => void
-  onConfirm: () => void
+  // A returned Promise keeps Delete disabled until it settles, so a double click
+  // can't send the delete twice (the second would 404).
+  onConfirm: () => void | Promise<void>
   title: string
   message: string
 }
@@ -29,6 +31,20 @@ export const DeleteConfirmationModal = ({
   // Cancel in the DOM for the reversed visual order) — one Enter from deleting.
   const cancelRef = useRef<HTMLButtonElement>(null)
   const containerRef = useFocusTrap<HTMLDivElement>(isOpen, onClose, cancelRef)
+  const [deleting, setDeleting] = useState(false)
+  const inFlight = useRef(false) // synchronous twin of `deleting` for back-to-back clicks
+
+  const confirm = async () => {
+    if (inFlight.current) return
+    inFlight.current = true
+    setDeleting(true)
+    try {
+      await onConfirm()
+    } finally {
+      inFlight.current = false
+      setDeleting(false)
+    }
+  }
 
   if (!isOpen) return null
 
@@ -36,7 +52,7 @@ export const DeleteConfirmationModal = ({
     <div className="fixed inset-0 z-50 overflow-y-auto">
       <div className="flex min-h-screen items-end justify-center px-4 pt-4 pb-20 text-center sm:block sm:p-0">
         <div
-          className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"
+          className="fixed inset-0 bg-gray-500/75 transition-opacity"
           onClick={onClose}
         />
 
@@ -50,7 +66,7 @@ export const DeleteConfirmationModal = ({
           className="inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6 focus:outline-none"
         >
           <div className="sm:flex sm:items-start">
-            <div className="mx-auto flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10">
+            <div className="mx-auto flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10">
               <TrashIcon className="h-6 w-6 text-red-600" />
             </div>
             <div className="mt-3 text-center sm:mt-0 sm:ml-4 sm:text-left">
@@ -65,8 +81,10 @@ export const DeleteConfirmationModal = ({
           <div className="mt-5 sm:mt-4 sm:flex sm:flex-row-reverse">
             <button
               type="button"
-              className="inline-flex w-full justify-center rounded-md border border-transparent bg-red-600 px-4 py-2 text-base font-medium text-white shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 sm:ml-3 sm:w-auto sm:text-sm"
-              onClick={onConfirm}
+              disabled={deleting}
+              aria-busy={deleting}
+              className="inline-flex w-full justify-center rounded-md border border-transparent bg-red-600 px-4 py-2 text-base font-medium text-white shadow-sm hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-red-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 sm:ml-3 sm:w-auto sm:text-sm"
+              onClick={confirm}
             >
               Delete
             </button>

@@ -43,6 +43,17 @@ describe('parseJsonBody', () => {
     const { error } = await parseJsonBody(makeReq('{"a":1}'), 3)
     expect(error?.status).toBe(413)
   })
+  it('the cap counts bytes, not characters (multi-byte text, no Content-Length)', async () => {
+    const body = '"€€€"' // 5 characters, 11 bytes of UTF-8
+    const req = makeReq(body)
+    expect(req.headers.get('content-length')).toBeNull()
+    expect((await parseJsonBody(req, 8)).error?.status).toBe(413)
+    expect((await parseJsonBody(makeReq(body), 11)).data).toBe('€€€')
+  })
+  it('a declared Content-Length over the cap -> 413 without reading', async () => {
+    const { error } = await parseJsonBody(makeReq('{}', { 'content-length': '5000000' }))
+    expect(error?.status).toBe(413)
+  })
   it('MAX_BODY_BYTES is sane', () => expect(MAX_BODY_BYTES).toBeGreaterThan(1000))
 })
 

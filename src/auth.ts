@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth/next'
 import CredentialsProvider from 'next-auth/providers/credentials'
 import { rateLimit, clientIpFromHeaders } from './rateLimit'
-import { validateTOTPCode } from './totp'
+import { assertTotpSupport, validateTOTPCode } from './totp'
 
 // Constant-time string equality: hash both sides to a fixed 32-byte digest so the
 // lengths always match (timingSafeEqual throws on length mismatch) and the compare
@@ -24,7 +24,18 @@ export interface AdminAuthConfig {
   totpSecret: string // base32 TOTP seed
   nextAuthSecret: string
   sessionTtlSeconds?: number // absolute window; default 30 min
+  // The client IP the per-IP login limit keys on. The default trusts the first
+  // X-Forwarded-For entry, which only a proxy that overwrites the header (Vercel
+  // does) makes trustworthy; elsewhere, read the header your proxy sets.
+  clientIp?: (headers: Parameters<typeof clientIpFromHeaders>[0]) => string
 }
+
+// After this many wrong codes from someone who knew the password, every login is
+// refused until the window ends. The per-IP limit alone can't stop a leaked
+// password plus rotating IPs from guessing the 6-digit code. Only failures past
+// the password count, so this can't be used to lock the admin out without it.
+const MAX_TOTP_FAILURES = 10
+const TOTP_FAILURE_WINDOW_MS = 15 * 60_000
 
 export interface AdminAuth {
   authOptions: AuthOptions
@@ -42,6 +53,8 @@ export function createAdminAuth(config: AdminAuthConfig): AdminAuth {
   if (!config.totpSecret) {
     throw new Error('admin-kit: createAdminAuth requires totpSecret')
   }
+  assertTotpSupport()
+  const clientIp = config.clientIp ?? clientIpFromHeaders
 
   // Only honour a positive ttl; 0 / negative / non-number falls back to 30 min.
   const ttlSeconds =
@@ -54,6 +67,15 @@ export function createAdminAuth(config: AdminAuthConfig): AdminAuth {
   // code that successfully authenticated so an immediate reuse is rejected.
   let lastAcceptedTotp: string | null = null
 
+  // Wrong codes entered after a correct password, in the current window.
+  let totpFailures = { count: 0, resetAt: 0 }
+  const totpLocked = () => Date.now() < totpFailures.resetAt && totpFailures.count >= MAX_TOTP_FAILURES
+  const recordTotpFailure = () => {
+    const now = Date.now()
+    if (now >= totpFailures.resetAt) totpFailures = { count: 0, resetAt: now + TOTP_FAILURE_WINDOW_MS }
+    totpFailures.count += 1
+  }
+
   const authOptions: AuthOptions = {
     providers: [
       CredentialsProvider({
@@ -65,7 +87,7 @@ export function createAdminAuth(config: AdminAuthConfig): AdminAuth {
         },
         async authorize(credentials, req) {
           // Throttle online brute force per client IP (covers password AND TOTP).
-          const ip = clientIpFromHeaders(req?.headers)
+          const ip = clientIp(req?.headers)
           if (!rateLimit(`login:${ip}`, 10, 60_000).allowed) {
             console.warn(`Login rate limit exceeded for ${ip}`)
             return null
@@ -82,8 +104,15 @@ export function createAdminAuth(config: AdminAuthConfig): AdminAuth {
           if (!emailOk || !passOk) {
             return null
           }
+          // Too many wrong codes after a correct password: refuse even a right
+          // one until the window ends, or the lock would only slow the guessing.
+          if (totpLocked()) {
+            console.warn('Admin login locked: too many wrong authenticator codes after a correct password')
+            return null
+          }
           // Third factor: TOTP. No session is issued unless this passes.
           if (!validateTOTPCode(credentials.totp, config.totpSecret).isValid) {
+            recordTotpFailure()
             return null
           }
           // Reject reuse of an already-accepted code; otherwise record it.
@@ -114,9 +143,10 @@ export function createAdminAuth(config: AdminAuthConfig): AdminAuth {
           token.expiresAt = Date.now() + ttlMs
         } else if (typeof token.expiresAt === 'number' && Date.now() >= token.expiresAt) {
           // LATER READS: once past the absolute deadline, strip the role from the
-          // raw token too (fail closed) so getToken()/middleware consumers that
-          // read the decoded JWT directly — not just the session callback — stop
-          // seeing 'admin'.
+          // token too (fail closed). This only rewrites the cookie on a session
+          // read: until one happens, a cookie issued before the deadline still
+          // decodes with role 'admin', so middleware using getToken() must check
+          // expiresAt itself.
           token.role = null
         }
         return token

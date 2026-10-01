@@ -9,10 +9,30 @@ interface LoginFormData {
   totp: string
 }
 
-// The admin login form: email + password + a 6-digit TOTP code. On success the
-// (auth) layout redirects to /admin. A site renders this from its
+interface LoginFormProps {
+  /** Where to go after signing in, unless the URL carries a same-origin ?callbackUrl. */
+  callbackUrl?: string
+}
+
+// Where to land after signing in: the ?callbackUrl next-auth adds when it bounces
+// a visitor to the login page, if it points at this site, else the default.
+// Only same-origin targets are honoured, so the login page can't be used as an
+// open redirect.
+function landingPath(fallback: string): string {
+  const requested = new URLSearchParams(window.location.search).get('callbackUrl')
+  if (!requested) return fallback
+  try {
+    const url = new URL(requested, window.location.origin)
+    return url.origin === window.location.origin ? `${url.pathname}${url.search}${url.hash}` : fallback
+  } catch {
+    return fallback
+  }
+}
+
+// The admin login form: email + password + a 6-digit TOTP code. On success it
+// navigates to callbackUrl (default /admin). A site renders this from its
 // app/admin/login/page.tsx.
-export function LoginForm() {
+export function LoginForm({ callbackUrl = '/admin' }: LoginFormProps = {}) {
   const [formData, setFormData] = useState<LoginFormData>({ email: '', password: '', totp: '' })
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState<boolean>(false)
@@ -27,25 +47,30 @@ export function LoginForm() {
     setLoading(true)
     setError(null)
     try {
+      const target = landingPath(callbackUrl)
       const result = await signIn('credentials', {
         email: formData.email,
         password: formData.password,
         totp: formData.totp,
-        callbackUrl: '/admin',
+        callbackUrl: target,
         redirect: false,
       })
-      if (result?.error) {
-        setError('Invalid email, password, or authenticator code')
-        // TOTP codes rotate every 30s; force a fresh entry on failure.
-        setFormData((prev) => ({ ...prev, totp: '' }))
+      if (result?.ok && !result.error) {
+        // A full page load, as next-auth's own signIn redirect does. A client
+        // navigation (router.replace) races any layout that redirects signed-in
+        // admins itself, and on Next 15 the two together crash the app router.
+        // Stay in the loading state while the next page loads.
+        window.location.assign(target)
+        return
       }
-      // The layout handles redirect on successful authentication.
+      setError('Invalid email, password, or authenticator code')
+      // TOTP codes rotate every 30s; force a fresh entry on failure.
+      setFormData((prev) => ({ ...prev, totp: '' }))
     } catch (err) {
       setError('An error occurred. Please try again.')
       console.error('Login error:', err)
-    } finally {
-      setLoading(false)
     }
+    setLoading(false)
   }
 
   return (
@@ -110,7 +135,7 @@ export function LoginForm() {
           {error && (
             <div className="rounded-md bg-red-50 p-4" role="alert" aria-live="assertive">
               <div className="flex">
-                <div className="flex-shrink-0">
+                <div className="shrink-0">
                   <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                     <path
                       fillRule="evenodd"

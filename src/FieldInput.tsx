@@ -53,7 +53,8 @@ function ImageUrlList({ value, onChange, label }: { value: string[]; onChange: (
 // the user's RAW STRING in local state while editing, mirror the parent value
 // when idle, and commit only a finite parsed number upstream — never snapping
 // in-progress input to 0. Rendered as type="text" + inputMode="decimal" so the
-// raw keystrokes survive; name/id/min/max/step/readOnly are preserved.
+// raw keystrokes survive. Browsers ignore min/max/step on a text input, so the
+// form checks them on submit (numberBoundsError) and the schema enforces them.
 function NumberInput({ field, value, onChange }: { field: Field; value: unknown; onChange: (value: unknown) => void }) {
   const required = !!(field.required || field.formRequired)
   const toStr = (v: unknown) => (v === null || v === undefined || v === '' ? '' : String(v))
@@ -76,9 +77,6 @@ function NumberInput({ field, value, onChange }: { field: Field; value: unknown;
       id={field.name}
       name={field.name}
       required={required}
-      min={field.min}
-      max={field.max}
-      step={field.step}
       readOnly={field.readOnly}
       value={editing ? raw : toStr(value)}
       onFocus={() => {
@@ -110,8 +108,10 @@ export function FieldInput({ field, value, onChange, form, setForm }: Props) {
           onChange={(e) => onChange(e.target.value)} className={BASE} />
       )
     case 'url':
+      // type="text", not "url": the browser's url check rejects the site-local
+      // "/path" values the schema accepts. The form's URL gate validates instead.
       return (
-        <input type="url" id={field.name} name={field.name} required={required}
+        <input type="text" inputMode="url" id={field.name} name={field.name} required={required}
           value={(value as string) ?? ''} placeholder={field.placeholder}
           onChange={(e) => onChange(e.target.value)} className={BASE} />
       )
@@ -137,9 +137,14 @@ export function FieldInput({ field, value, onChange, form, setForm }: Props) {
       const opts = (field.options ?? []).map((o) =>
         typeof o === 'string' ? { value: o, label: humanize(o) } : o,
       )
+      const current = value === undefined || value === null ? '' : String(value)
+      // A value that matches no option would display as the first option while
+      // state keeps the real one, so show it as its own option instead.
+      const unlisted = !opts.some((o) => o.value === current)
       return (
         <select id={field.name} name={field.name} required={required}
-          value={(value as string) ?? ''} onChange={(e) => onChange(e.target.value)} className={BASE}>
+          value={current} onChange={(e) => onChange(e.target.value)} className={BASE}>
+          {unlisted && <option value={current}>{current || '—'}</option>}
           {opts.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
         </select>
       )

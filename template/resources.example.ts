@@ -6,6 +6,7 @@ import { defineResource } from '@maksimdan/admin-kit'
 export const products = defineResource({
   name: 'products', // route segment + Mongo collection
   label: 'Product', // singular, used in titles/buttons
+  list: { public: true }, // GET is admin-only unless a resource opts in
   card: {
     title: 'Products',
     description: 'Manage your products.',
@@ -16,7 +17,7 @@ export const products = defineResource({
   },
   fields: [
     { name: 'name', type: 'text', required: true, label: 'Product Name' },
-    { name: 'price', type: 'number', required: true, default: 0, align: 'right' },
+    { name: 'price', type: 'number', required: true, default: 0, step: 0.01, align: 'right' },
     {
       name: 'status',
       type: 'select',

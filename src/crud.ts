@@ -1,65 +1,115 @@
 import { NextResponse } from 'next/server'
 import { ObjectId } from 'mongodb'
-import { getClientPromise, getDbName, requireAdmin } from './config'
+import { bindRuntime, globalRuntime, type AdminKitConfig, type KitRuntime } from './config'
 import { parseJsonBody, validate, parsePagination, invalidObjectIdResponse, MAX_PAGE_LIMIT } from './validation'
-import type { DefinedResource } from './resource'
+import type { DefinedResource, ReadContext } from './resource'
+import type { Field } from './field'
 
 // The generic GET/POST/PATCH/DELETE factory. crud(resource) returns Next.js route
 // handlers: requireAdmin on mutations, validate-before-id ordering, createdAt/
 // updatedAt stamping, pagination, and per-entity quirks via hooks (mapRead /
 // buildWrite / mapCreateResponse / customPatch). The Mongo client and the admin
-// check come from configureAdminKit() (see config.ts).
+// check come from createAdminKit() or configureAdminKit() (see config.ts).
 
-export function crud(r: DefinedResource) {
-  const getDb = async () => (await getClientPromise()).db(getDbName())
-  const getCol = async () => (await getDb()).collection(r.collection ?? r.name)
-  const persistKeys = r.fields.filter((f) => f.persist !== false).map((f) => f.name)
+// Keys crud() manages itself; never written from a request body.
+const RESERVED_KEYS = new Set(['_id', 'createdAt', 'updatedAt'])
+
+// Date fields are server-managed by default (e.g. createdAt shown in the table),
+// so they are only written from the body when the field sets persist: true.
+const isPersisted = (f: Field): boolean => !RESERVED_KEYS.has(f.name) && (f.persist ?? f.type !== 'date')
+
+const has = (obj: Record<string, unknown>, key: string): boolean => Object.prototype.hasOwnProperty.call(obj, key)
+
+// A persisted date arrives as the ISO string the form round-tripped: store a
+// real Date ('' or null clears it). undefined = unparseable, leave it unwritten.
+function toDate(value: unknown): Date | null | undefined {
+  if (value instanceof Date) return value
+  if (value === null || value === '') return null
+  if (typeof value === 'string' || typeof value === 'number') {
+    const d = new Date(value)
+    return Number.isNaN(d.getTime()) ? undefined : d
+  }
+  return undefined
+}
+
+function makeCrud(r: DefinedResource, kit: KitRuntime) {
+  const getCol = async () => (await kit.getDb()).collection(r.collection ?? r.name)
+  const persisted = r.fields.filter(isPersisted)
   // Build the default $set: only persisted keys actually PRESENT in the raw body
   // (so PATCH is genuinely partial and omitted optionals aren't nulled), taking
   // each value from the parsed/coerced object when present, else the raw body.
-  const pickSet = (
-    body: Record<string, unknown>,
-    parsed?: Record<string, unknown>,
-  ): Record<string, unknown> =>
-    Object.fromEntries(
-      persistKeys
-        .filter((k) => k in body)
-        .map((k) => [k, parsed && k in parsed ? parsed[k] : body[k]]),
-    )
+  const pickSet = (body: Record<string, unknown>, parsed?: Record<string, unknown>): Record<string, unknown> => {
+    const set: Record<string, unknown> = {}
+    for (const f of persisted) {
+      if (!has(body, f.name)) continue
+      const value = parsed && has(parsed, f.name) ? parsed[f.name] : body[f.name]
+      if (f.type !== 'date') {
+        set[f.name] = value
+        continue
+      }
+      const date = toDate(value)
+      if (date !== undefined) set[f.name] = date
+    }
+    return set
+  }
+
+  // On a public resource, being an admin only changes the view (filter, mapRead,
+  // the page cap), so an auth error just means "not an admin".
+  async function callerIsAdmin(): Promise<boolean> {
+    try {
+      return (await kit.requireAdmin()) === null
+    } catch (error) {
+      console.error(`Admin check failed while reading ${r.name}:`, error)
+      return false
+    }
+  }
 
   async function GET(req: Request) {
     try {
       // Secure by default: GET requires admin UNLESS the resource explicitly opts
       // into a public listing with list.public === true.
-      if (r.list?.public !== true) {
-        const authError = await requireAdmin()
+      let isAdmin = true
+      if (r.list?.public === true) {
+        isAdmin = await callerIsAdmin()
+      } else {
+        const authError = await kit.requireAdmin()
         if (authError) return authError
       }
+      const ctx: ReadContext = { isAdmin }
       const sp = new URL(req.url).searchParams
+      const query = r.list?.filter ? r.list.filter(sp, ctx) : {}
+      const mapRead = r.hooks?.mapRead
       const col = await getCol()
 
-      if (r.list?.byId && sp.get('id')) {
-        const id = sp.get('id')
+      const id = sp.get('id')
+      if (r.list?.byId && id) {
         const idError = invalidObjectIdResponse(id)
         if (idError) return idError
-        const doc = await col.findOne({ _id: new ObjectId(id!) })
+        // The filter applies here too, so a row hidden from the list is not
+        // reachable by guessing its id.
+        const doc = await col.findOne({ ...query, _id: new ObjectId(id) })
         if (!doc) return NextResponse.json({ error: `${r.label} not found` }, { status: 404 })
-        return NextResponse.json(r.hooks?.mapRead ? r.hooks.mapRead(doc) : doc)
+        return NextResponse.json(mapRead ? mapRead(doc, ctx) : doc)
       }
 
-      let cursor = col.find(r.list?.filter ? r.list.filter(sp) : {})
+      let cursor = col.find(query)
       if (r.list?.sort !== null) {
-        const fallbackSort: Record<string, 1 | -1> = r.list?.orderField ? { [r.list.orderField]: 1 } : { createdAt: -1 }
+        // _id breaks ties so the order (and therefore paging) is deterministic.
+        const fallbackSort: Record<string, 1 | -1> = r.list?.orderField
+          ? { [r.list.orderField]: 1, _id: 1 }
+          : { createdAt: -1, _id: -1 }
         cursor = cursor.sort(r.list?.sort ?? fallbackSort)
       }
       if (r.list?.paginate) {
-        // Default-on cap: a paginated resource can never dump the whole collection,
-        // even when the client gives no/invalid limit.
+        // The page cap keeps a public request from dumping the whole collection;
+        // an admin asking for no particular page (the admin table) gets every row.
         const { limit, offset } = parsePagination(sp)
-        cursor = cursor.skip(offset ?? 0).limit(limit ?? MAX_PAGE_LIMIT)
+        if (offset) cursor = cursor.skip(offset)
+        const pageSize = limit ?? (isAdmin ? undefined : MAX_PAGE_LIMIT)
+        if (pageSize !== undefined) cursor = cursor.limit(pageSize)
       }
       const docs = await cursor.toArray()
-      return NextResponse.json(r.hooks?.mapRead ? docs.map(r.hooks.mapRead) : docs)
+      return NextResponse.json(mapRead ? docs.map((doc) => mapRead(doc, ctx)) : docs)
     } catch (error) {
       console.error(`Error fetching ${r.name}:`, error)
       return NextResponse.json({ error: `Error fetching ${r.name}` }, { status: 500 })
@@ -67,9 +117,9 @@ export function crud(r: DefinedResource) {
   }
 
   async function POST(req: Request) {
-    const authError = await requireAdmin()
-    if (authError) return authError
     try {
+      const authError = await kit.requireAdmin()
+      if (authError) return authError
       const { data, error: bodyError } = await parseJsonBody(req)
       if (bodyError) return bodyError
       const body = data as Record<string, unknown>
@@ -81,7 +131,7 @@ export function crud(r: DefinedResource) {
       const defaults = pickSet(body, parsed as Record<string, unknown>)
       let setDoc: Record<string, unknown>
       if (r.hooks?.buildWrite) {
-        const patch = await r.hooks.buildWrite({ mode: 'create', body, existing: null, defaults, db: await getDb() })
+        const patch = await r.hooks.buildWrite({ mode: 'create', body, existing: null, defaults, db: await kit.getDb() })
         if (patch instanceof NextResponse) return patch
         setDoc = patch.set
       } else {
@@ -105,9 +155,9 @@ export function crud(r: DefinedResource) {
   async function PATCH(req: Request) {
     if (r.hooks?.customPatch) return r.hooks.customPatch(req)
 
-    const authError = await requireAdmin()
-    if (authError) return authError
     try {
+      const authError = await kit.requireAdmin()
+      if (authError) return authError
       const { data, error: bodyError } = await parseJsonBody(req)
       if (bodyError) return bodyError
       const body = data as Record<string, unknown> & { _id?: string }
@@ -125,7 +175,7 @@ export function crud(r: DefinedResource) {
       let unset: string[] | undefined
       if (r.hooks?.buildWrite) {
         const existing = await col.findOne({ _id })
-        const patch = await r.hooks.buildWrite({ mode: 'update', body, existing, defaults, db: await getDb() })
+        const patch = await r.hooks.buildWrite({ mode: 'update', body, existing, defaults, db: await kit.getDb() })
         if (patch instanceof NextResponse) return patch
         setDoc = patch.set
         unset = patch.unset
@@ -146,9 +196,9 @@ export function crud(r: DefinedResource) {
   }
 
   async function DELETE(req: Request) {
-    const authError = await requireAdmin()
-    if (authError) return authError
     try {
+      const authError = await kit.requireAdmin()
+      if (authError) return authError
       const { searchParams } = new URL(req.url)
       const id = searchParams.get('id')
       const idError = invalidObjectIdResponse(id)
@@ -180,17 +230,16 @@ const MAX_REORDER = 5000
 // bulkWrite. Dense reassignment keeps positions unique and gap-free with no manual
 // number entry and no uniqueness collisions to resolve. Mount at
 // /api/{name}/reorder:  export const { POST } = reorder(myResource)
-export function reorder(r: DefinedResource) {
+function makeReorder(r: DefinedResource, kit: KitRuntime) {
   const orderField = r.list?.orderField
-  const getCol = async () => (await getClientPromise()).db(getDbName()).collection(r.collection ?? r.name)
 
   async function POST(req: Request) {
-    const authError = await requireAdmin()
-    if (authError) return authError
-    if (!orderField) {
-      return NextResponse.json({ error: `Reorder is not enabled for ${r.name}: set list.orderField.` }, { status: 400 })
-    }
     try {
+      const authError = await kit.requireAdmin()
+      if (authError) return authError
+      if (!orderField) {
+        return NextResponse.json({ error: `Reorder is not enabled for ${r.name}: set list.orderField.` }, { status: 400 })
+      }
       const { data, error: bodyError } = await parseJsonBody(req)
       if (bodyError) return bodyError
       const ids = (data as { ids?: unknown } | null)?.ids
@@ -209,7 +258,7 @@ export function reorder(r: DefinedResource) {
       }
 
       const now = new Date()
-      const col = await getCol()
+      const col = (await kit.getDb()).collection(r.collection ?? r.name)
       const ops = (ids as string[]).map((id, index) => ({
         updateOne: {
           filter: { _id: new ObjectId(id) },
@@ -225,4 +274,21 @@ export function reorder(r: DefinedResource) {
   }
 
   return { POST }
+}
+
+// Route handlers bound to the config passed to configureAdminKit(). The config
+// is read per request, so the setup module must have run by then — import it
+// at the top of every route file.
+export const crud = (r: DefinedResource) => makeCrud(r, globalRuntime)
+export const reorder = (r: DefinedResource) => makeReorder(r, globalRuntime)
+
+// A kit instance bound to its own config. Export its crud/reorder from your
+// setup module and import them in route files: a route then cannot run before
+// the kit is configured, whatever the module load order.
+export function createAdminKit(config: AdminKitConfig) {
+  const kit = bindRuntime(config)
+  return {
+    crud: (r: DefinedResource) => makeCrud(r, kit),
+    reorder: (r: DefinedResource) => makeReorder(r, kit),
+  }
 }

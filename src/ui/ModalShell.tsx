@@ -25,7 +25,7 @@ export const ModalShell = ({ isOpen, onClose, title, children }: ModalShellProps
       <div className="flex min-h-screen items-end justify-center px-4 pt-4 pb-20 text-center sm:block sm:p-0">
         {/* Background overlay */}
         <div
-          className="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"
+          className="fixed inset-0 bg-gray-500/75 transition-opacity"
           onClick={onClose}
         />
 

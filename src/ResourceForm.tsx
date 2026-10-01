@@ -1,9 +1,9 @@
 'use client'
 
-import { useState, type FormEvent } from 'react'
+import { useRef, useState, type FormEvent } from 'react'
 import type { DefinedResource } from './resource'
 import type { Field } from './field'
-import { humanize, optionValues } from './field'
+import { humanize, numberBoundsError, optionValues } from './field'
 import { isValidImageUrl } from './imageUtils'
 import { FieldInput } from './FieldInput'
 
@@ -21,11 +21,12 @@ function resolveDefault(field: Field): unknown {
     case 'images':
       return ['']
     case 'select': {
-      // A required select left at '' would display its first option (browser
-      // default) while state holds '' — a controlled/display mismatch. Seed the
-      // first non-empty option so state matches what the user is shown.
-      if (field.required || field.formRequired) {
-        return optionValues(field.options).find((v) => v !== '') ?? ''
+      // A select whose state matches no option displays its first option while
+      // state holds something else. Seed the first real option unless the
+      // select offers an empty choice the user can see (and isn't required).
+      const values = optionValues(field.options)
+      if (field.required || field.formRequired || !values.includes('')) {
+        return values.find((v) => v !== '') ?? ''
       }
       return ''
     }
@@ -34,9 +35,14 @@ function resolveDefault(field: Field): unknown {
   }
 }
 
+// Date fields are server-managed (there is no date input), so they stay out of
+// the form unless a field says otherwise.
+const inForm = (f: Field): boolean => !(f.formHidden ?? f.type === 'date')
+
 // Config-driven 2-col form. Seeds defaults (so required selects like status are
-// pre-filled), recomputes computed fields, and runs the same client URL gate the
-// hand-written forms had before submitting.
+// pre-filled), recomputes computed fields, and runs the client URL and number
+// gates before submitting. A Promise returned by onSubmit keeps the submit
+// button disabled until it settles, so a double click can't save twice.
 export function ResourceForm({
   resource,
   initialData,
@@ -45,15 +51,17 @@ export function ResourceForm({
 }: {
   resource: DefinedResource
   initialData?: Row
-  onSubmit: (data: Row) => void
+  onSubmit: (data: Row) => void | Promise<void>
   onCancel: () => void
 }) {
-  const formFields = resource.fields.filter((f) => !f.formHidden)
+  const formFields = resource.fields.filter(inForm)
   const [form, setForm] = useState<Row>(() => {
     const init: Row = {}
     for (const f of formFields) init[f.name] = initialData?.[f.name] ?? resolveDefault(f)
     return init
   })
+  const [submitting, setSubmitting] = useState(false)
+  const inFlight = useRef(false) // synchronous twin of `submitting` for back-to-back events
 
   const setValue = (name: string, value: unknown) => {
     setForm((prev) => {
@@ -64,28 +72,46 @@ export function ResourceForm({
   }
   const patchForm = (patch: Row) => setForm((prev) => ({ ...prev, ...patch }))
 
-  const handleSubmit = (e: FormEvent) => {
+  const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
-    // Client URL gate (matches the current forms): url/image/images must be a
-    // valid URL or empty.
+    if (inFlight.current) return
+    const out: Row = { ...form }
+    for (const f of formFields) if (f.compute) out[f.name] = f.compute(out)
     for (const f of formFields) {
+      // url/image/images must be a valid URL or empty.
       if (f.type === 'url' || f.type === 'image') {
-        if (!isValidImageUrl((form[f.name] as string) ?? '')) {
+        if (!isValidImageUrl((out[f.name] as string) ?? '')) {
           alert(`${f.label ?? humanize(f.name)} must be a valid URL (http:// or https://) or left empty.`)
           return
         }
       }
       if (f.type === 'images') {
-        const arr = (form[f.name] as string[]) ?? []
-        if (arr.some((u) => u && !isValidImageUrl(u))) {
+        // Blank rows are just unused inputs; don't store them.
+        const urls = (Array.isArray(out[f.name]) ? (out[f.name] as unknown[]) : [])
+          .map((u) => (typeof u === 'string' ? u.trim() : ''))
+          .filter(Boolean)
+        if (urls.some((u) => !isValidImageUrl(u))) {
           alert('Each image must be a valid URL (http:// or https://) or left empty.')
+          return
+        }
+        out[f.name] = urls
+      }
+      if (f.type === 'number') {
+        const problem = numberBoundsError(f, out[f.name])
+        if (problem) {
+          alert(`${problem}.`)
           return
         }
       }
     }
-    const out: Row = { ...form }
-    for (const f of formFields) if (f.compute) out[f.name] = f.compute(out)
-    onSubmit(out)
+    inFlight.current = true
+    setSubmitting(true)
+    try {
+      await onSubmit(out)
+    } finally {
+      inFlight.current = false
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -124,7 +150,7 @@ export function ResourceForm({
         <button type="button" onClick={onCancel} className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
           Cancel
         </button>
-        <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 border border-transparent rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">
+        <button type="submit" disabled={submitting} aria-busy={submitting} className="px-4 py-2 text-sm font-medium text-white bg-indigo-600 border border-transparent rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:cursor-not-allowed disabled:opacity-50">
           {initialData ? `Update ${resource.label}` : `Create ${resource.label}`}
         </button>
       </div>

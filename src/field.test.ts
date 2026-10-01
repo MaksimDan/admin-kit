@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { z } from 'zod'
-import { toZod, capitalize, humanize, nonNegativeNumber, optionalUrl } from './field'
+import { toZod, capitalize, humanize, nonNegativeNumber, optionalUrl, numberBoundsError } from './field'
 import type { Field } from './field'
 
 const s = (fields: Field[]) => toZod(fields)
@@ -32,6 +32,48 @@ describe('toZod — schema derivation', () => {
     expect(s([{ name: 'q', type: 'number' }]).safeParse({}).success).toBe(true) // optional
   })
 
+  it('number: only numeric strings coerce; "", booleans, arrays and hex are rejected', () => {
+    const schema = s([{ name: 'n', type: 'number', required: true }])
+    for (const ok of ['10', ' 5 ', '2.5', '1e3', 7]) expect(schema.safeParse({ n: ok }).success).toBe(true)
+    for (const bad of ['', '  ', true, [], [7], '0x10', null]) expect(schema.safeParse({ n: bad }).success).toBe(false)
+  })
+
+  it('number: min (default 0), max and step are enforced with labelled messages', () => {
+    const schema = s([
+      { name: 'rating', type: 'number', min: 1, max: 5 },
+      { name: 'price', type: 'number', label: 'Price ($)', step: 0.01 },
+      { name: 'delta', type: 'number', min: -10 },
+    ])
+    expect(schema.safeParse({ rating: 3, price: 19.99, delta: -4 }).success).toBe(true)
+    const tooHigh = schema.safeParse({ rating: 6 })
+    expect(tooHigh.success).toBe(false)
+    if (!tooHigh.success) expect(tooHigh.error.issues[0].message).toBe('Rating must be at most 5')
+    expect(schema.safeParse({ rating: 0 }).success).toBe(false)
+    expect(schema.safeParse({ price: -1 }).success).toBe(false) // floor defaults to 0
+    const offStep = schema.safeParse({ price: 19.999 })
+    expect(offStep.success).toBe(false)
+    if (!offStep.success) expect(offStep.error.issues[0].message).toBe('Price ($) must be in steps of 0.01')
+    expect(schema.safeParse({ delta: -11 }).success).toBe(false)
+  })
+
+  it('number: emptyAsNull keeps null (unless required)', () => {
+    const opt = s([{ name: 'd', type: 'number', emptyAsNull: true }])
+    const r = opt.safeParse({ d: null })
+    expect(r.success).toBe(true)
+    if (r.success) expect(r.data.d).toBeNull()
+    expect(s([{ name: 'd', type: 'number', emptyAsNull: true, required: true }]).safeParse({ d: null }).success).toBe(false)
+    expect(s([{ name: 'd', type: 'number' }]).safeParse({ d: null }).success).toBe(false)
+  })
+
+  it('numberBoundsError reports only the bounds a field declares', () => {
+    const year: Field = { name: 'year', type: 'number', min: 1900, max: 2027 }
+    expect(numberBoundsError(year, 1899)).toBe('Year must be at least 1900')
+    expect(numberBoundsError(year, 2030)).toBe('Year must be at most 2027')
+    expect(numberBoundsError(year, 2020)).toBeNull()
+    expect(numberBoundsError({ name: 'price', type: 'number', step: 0.01 }, 1.005)).toBe('Price must be in steps of 0.01')
+    expect(numberBoundsError({ name: 'qty', type: 'number' }, -3)).toBeNull() // no declared min
+  })
+
   it('select: enumValidated -> z.enum; otherwise optional string', () => {
     const enumS = s([{ name: 'status', type: 'select', required: true, enumValidated: true, options: ['active', 'inactive'] }])
     expect(enumS.safeParse({ status: 'active' }).success).toBe(true)
@@ -44,6 +86,14 @@ describe('toZod — schema derivation', () => {
     const schema = s([{ name: 'cat', type: 'select', required: true, enumValidated: true, options: [{ value: '', label: 'Pick' }, 'a'] }])
     expect(schema.safeParse({ cat: 'a' }).success).toBe(true)
     expect(schema.safeParse({ cat: '' }).success).toBe(false)
+  })
+
+  it('an optional enumValidated select may be missing or empty, but not unlisted', () => {
+    const schema = s([{ name: 'cat', type: 'select', enumValidated: true, options: [{ value: '', label: 'None' }, 'a'] }])
+    expect(schema.safeParse({}).success).toBe(true)
+    expect(schema.safeParse({ cat: '' }).success).toBe(true)
+    expect(schema.safeParse({ cat: 'a' }).success).toBe(true)
+    expect(schema.safeParse({ cat: 'b' }).success).toBe(false)
   })
 
   it('url/image: optionalUrl (empty, site path, http ok; junk rejected) regardless of required', () => {
@@ -106,5 +156,6 @@ describe('helpers', () => {
     expect(optionalUrl.safeParse('/x').success).toBe(true)
     expect(optionalUrl.safeParse('https://x.co').success).toBe(true)
     expect(optionalUrl.safeParse('123').success).toBe(false)
+    expect(optionalUrl.safeParse('//evil.example/a.png').success).toBe(false)
   })
 })

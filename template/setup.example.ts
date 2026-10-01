@@ -1,15 +1,13 @@
 // Copy to: src/lib/admin-kit-setup.ts
-// Run ONCE before any crud route handles a request — import it from your route
-// files (and/or src/config/resources.server.ts).
+// Server-only. Builds the admin auth and a kit instance; route files import
+// crud/reorder from here, so a route can never run before the kit is configured.
 //
-// The kit now PROVIDES auth AND the Mongo connection: createAdminAuth() builds the
+// The kit PROVIDES auth AND the Mongo connection: createAdminAuth() builds the
 // next-auth options + requireAdmin from your single admin's credentials, and
-// createClientPromise() (from /mongo) is the HMR-safe Mongo client singleton —
-// import it here instead of hand-rolling a '@/lib/mongodb'. You only supply env.
-import { createAdminAuth, configureAdminKit } from '@maksimdan/admin-kit/server'
+// createClientPromise() (from /mongo) is the HMR-safe Mongo client singleton.
+// You only supply env.
+import { createAdminAuth, createAdminKit } from '@maksimdan/admin-kit/server'
 import { createClientPromise } from '@maksimdan/admin-kit/mongo'
-
-const clientPromise = createClientPromise() // HMR-safe singleton; reads MONGODB_URI
 
 export const { authOptions, requireAdmin } = createAdminAuth({
   adminEmail: process.env.ADMIN_EMAIL!,
@@ -18,8 +16,13 @@ export const { authOptions, requireAdmin } = createAdminAuth({
   nextAuthSecret: process.env.NEXTAUTH_SECRET!,
 })
 
-// Hand the kit's crud() the Mongo client + the admin check.
-configureAdminKit({ clientPromise, requireAdmin, dbName: process.env.MONGODB_DB })
+// getClient is called per request: createClientPromise() reuses one client and
+// retries after a failed connect instead of failing every later request.
+export const { crud, reorder } = createAdminKit({
+  getClient: createClientPromise,
+  requireAdmin,
+  dbName: process.env.MONGODB_DB,
+})
 
 // Then, app-level (Next can't package route segments):
 //   app/api/auth/[...nextauth]/route.ts

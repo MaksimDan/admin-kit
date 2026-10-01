@@ -24,25 +24,36 @@ export interface CreateRespCtx {
   doc: Record<string, unknown>
 }
 
+// Who is reading, for list.filter and hooks.mapRead. On a public resource this
+// shapes the view (e.g. drafts only for an admin); it never grants access.
+export interface ReadContext {
+  isAdmin: boolean
+}
+
 export interface ListConfig {
-  public?: boolean // default true; false => GET requires admin (leads)
-  byId?: boolean // default false; true => GET ?id= returns a single doc (vehicles)
-  sort?: Record<string, 1 | -1> | null // default {createdAt:-1} (or {[orderField]:1} when orderField set); null => no .sort()
-  paginate?: boolean // default false; true => apply parsePagination (vehicles/blogs)
-  filter?: (sp: URLSearchParams) => Record<string, unknown> // products activeOnly, blogs status=published
+  public?: boolean // default false (GET requires admin); true => anyone may GET
+  byId?: boolean // default false; true => GET ?id= returns a single doc (still subject to filter)
+  sort?: Record<string, 1 | -1> | null // default {createdAt:-1, _id:-1} (or {[orderField]:1, _id:1}); null => no .sort()
+  // default false; true => limit/offset paging, capped at MAX_PAGE_LIMIT per page.
+  // An admin request without a limit (the admin table) returns every row.
+  paginate?: boolean
+  // Query applied to the list AND to ?id= lookups. Use ctx.isAdmin to hide rows
+  // from the public, e.g. (sp, { isAdmin }) => (isAdmin ? {} : { status: 'published' }).
+  filter?: (sp: URLSearchParams, ctx: ReadContext) => Record<string, unknown>
   // When set, the admin table is drag-reorderable and reorder() persists a dense
-  // 0..n-1 sequence to this field. Opt-in per resource; pair with a curated
-  // (non-paginated) list. GET falls back to sorting by this field when sort is unset.
+  // 0..n-1 sequence to this field (mount it at /api/{name}/reorder). Opt-in per
+  // resource; pair with a curated list. GET falls back to sorting by this field
+  // when sort is unset.
   orderField?: string
 }
 
 export interface ResourceHooks {
-  mapRead?: (doc: Record<string, unknown>) => Record<string, unknown>
+  mapRead?: (doc: Record<string, unknown>, ctx: ReadContext) => Record<string, unknown>
   // POST & PATCH write builder. Returns the $set/$unset patch, OR a NextResponse
-  // to short-circuit (e.g. services duplicate-order 400 / no-change 200 / 404).
+  // to short-circuit (e.g. a duplicate-key 400, a no-change 200, a 404).
   buildWrite?: (ctx: WriteCtx) => WritePatch | NextResponse | Promise<WritePatch | NextResponse>
   mapCreateResponse?: (ctx: CreateRespCtx) => unknown
-  customPatch?: (req: Request) => Promise<NextResponse> // fully replaces PATCH incl. its own requireAdmin (leads)
+  customPatch?: (req: Request) => Promise<NextResponse> // fully replaces PATCH, including its own admin check
 }
 
 export interface ResourceCard {

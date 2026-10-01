@@ -26,7 +26,21 @@ export const validateTOTPCode = (code: string, secret: string): ValidationResult
   }
 }
 
+// otplib 13 removed the `authenticator` API this module is built on. Fail at
+// startup with a clear message instead of rejecting every code (validateTOTPCode
+// would catch the TypeError and report "invalid code").
+export function assertTotpSupport(): void {
+  if (typeof authenticator?.clone !== 'function') {
+    throw new Error('admin-kit: otplib v12 is required (otplib 13 removed the authenticator API).')
+  }
+}
+
+// A new base32 seed for AUTHENTICATION_KEY.
 export const generateTOTPSecret = (): string => authenticator.generateSecret()
+
+// The otpauth:// URI an authenticator app enrolls from (render it as a QR code).
+export const totpKeyUri = (accountName: string, issuer: string, secret: string): string =>
+  authenticator.keyuri(accountName, issuer, secret)
 
 // Useful for tests: the current code for a secret.
 export const generateTOTPCode = (secret: string): string => authenticator.generate(secret)

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useSession } from 'next-auth/react'
 import type { DefinedResource } from './resource'
 import { AdminGate } from './ui/AdminGate'
@@ -18,8 +18,10 @@ type Row = Record<string, unknown>
 // so they match the hand-written pages exactly.
 export function ResourcePage({ resource }: { resource: DefinedResource }) {
   const { data: session, status } = useSession()
-  const [rows, setRows] = useState<Row[]>([])
-  const [rowsLoading, setRowsLoading] = useState(true)
+  // null until the first load finishes. Later refetches keep the current rows on
+  // screen instead of swapping the page for the loading state (which would also
+  // unmount the button focus should return to when a modal closes).
+  const [rows, setRows] = useState<Row[] | null>(null)
   const [fetchFailed, setFetchFailed] = useState(false)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [selected, setSelected] = useState<Row | undefined>()
@@ -27,7 +29,6 @@ export function ResourcePage({ resource }: { resource: DefinedResource }) {
   const endpoint = `/api/${resource.name}`
 
   const fetchRows = useCallback(async () => {
-    setRowsLoading(true)
     setFetchFailed(false)
     try {
       const res = await fetch(endpoint)
@@ -36,8 +37,6 @@ export function ResourcePage({ resource }: { resource: DefinedResource }) {
     } catch (error) {
       console.error(`Error fetching ${resource.name}:`, error)
       setFetchFailed(true)
-    } finally {
-      setRowsLoading(false)
     }
   }, [endpoint, resource.name])
 
@@ -95,33 +94,55 @@ export function ResourcePage({ resource }: { resource: DefinedResource }) {
     }
   }
 
-  // Reorder (only reachable when the resource declares list.orderField): apply the
-  // new order optimistically, then persist it to /api/{name}/reorder. Revert on
-  // failure so the table never diverges from the stored order.
-  const handleReorder = async (orderedIds: string[]) => {
-    const prev = rows
-    const byId = new Map(rows.map((r) => [String(r._id), r]))
-    const next = orderedIds.map((id) => byId.get(id)).filter((r): r is Row => Boolean(r))
-    setRows(next)
+  // Reorder (only reachable when the resource declares list.orderField). Each
+  // move is applied to the table at once and persisted to /api/{name}/reorder.
+  // One request is in flight at a time: moves made meanwhile collapse into the
+  // latest order, sent when it returns, so writes land in the order they were
+  // made. A failure reloads the stored order rather than guessing at it.
+  const reorderInFlight = useRef(false)
+  const queuedOrder = useRef<string[] | null>(null)
+
+  const persistOrder = async (orderedIds: string[]) => {
+    if (reorderInFlight.current) {
+      queuedOrder.current = orderedIds
+      return
+    }
+    reorderInFlight.current = true
+    let ids: string[] | null = orderedIds
     try {
-      const res = await fetch(`${endpoint}/reorder`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids: orderedIds }),
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}))
-        throw new Error(err.error || `Failed to reorder ${resource.label.toLowerCase()}`)
+      while (ids) {
+        queuedOrder.current = null
+        const res = await fetch(`${endpoint}/reorder`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids }),
+        })
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}))
+          throw new Error(err.error || `Failed to reorder ${resource.label.toLowerCase()}`)
+        }
+        ids = queuedOrder.current
       }
     } catch (error) {
+      queuedOrder.current = null
       console.error(`Error reordering ${resource.name}:`, error)
-      setRows(prev)
       alert(error instanceof Error ? error.message : 'An error occurred')
+      await fetchRows()
+    } finally {
+      reorderInFlight.current = false
     }
   }
 
+  const handleReorder = (orderedIds: string[]) => {
+    setRows((current) => {
+      const byId = new Map((current ?? []).map((r) => [String(r._id), r]))
+      return orderedIds.map((id) => byId.get(id)).filter((r): r is Row => Boolean(r))
+    })
+    void persistOrder(orderedIds)
+  }
+
   return (
-    <AdminGate session={session} isLoading={status === 'loading' || rowsLoading}>
+    <AdminGate session={session} isLoading={status === 'loading' || (rows === null && !fetchFailed)}>
       <div className="space-y-8">
         <AdminPageHeader title={`${resource.label} Management`} buttonLabel={`Add New ${resource.label}`} onAdd={handleAddNew} />
 
@@ -136,7 +157,7 @@ export function ResourcePage({ resource }: { resource: DefinedResource }) {
               Retry
             </button>
           </div>
-        ) : rows.length === 0 ? (
+        ) : !rows || rows.length === 0 ? (
           <EmptyState
             message={`No ${resource.name} found`}
             actionLabel={`Add your first ${resource.label.toLowerCase()}`}

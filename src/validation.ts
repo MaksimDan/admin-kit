@@ -35,24 +35,50 @@ export function parsePagination(searchParams: URLSearchParams): { limit?: number
 
 export const MAX_BODY_BYTES = 1_000_000
 
-// Reads and JSON-parses a request body with a size cap (413 too large, 400 invalid).
+const tooLarge = () => ({ error: NextResponse.json({ error: 'Request body too large' }, { status: 413 }) })
+
+// Reads the body as UTF-8, counting bytes as they stream in and stopping at
+// maxBytes, so a body without Content-Length can't make us buffer it all
+// first. null = over the cap.
+async function readBodyText(req: Request, maxBytes: number): Promise<string | null> {
+  if (!req.body) return ''
+  const reader = req.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > maxBytes) {
+      await reader.cancel().catch(() => {})
+      return null
+    }
+    chunks.push(value)
+  }
+  const bytes = new Uint8Array(total)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return new TextDecoder().decode(bytes)
+}
+
+// Reads and JSON-parses a request body with a size cap in bytes (413 too large,
+// 400 invalid).
 export async function parseJsonBody(
   req: Request,
   maxBytes: number = MAX_BODY_BYTES,
 ): Promise<{ data?: unknown; error?: NextResponse }> {
   const contentLength = req.headers.get('content-length')
-  if (contentLength && Number(contentLength) > maxBytes) {
-    return { error: NextResponse.json({ error: 'Request body too large' }, { status: 413 }) }
-  }
-  let text: string
+  if (contentLength && Number(contentLength) > maxBytes) return tooLarge()
+  let text: string | null
   try {
-    text = await req.text()
+    text = await readBodyText(req, maxBytes)
   } catch {
     return { error: NextResponse.json({ error: 'Unable to read request body' }, { status: 400 }) }
   }
-  if (text.length > maxBytes) {
-    return { error: NextResponse.json({ error: 'Request body too large' }, { status: 413 }) }
-  }
+  if (text === null) return tooLarge()
   try {
     return { data: text ? JSON.parse(text) : {} }
   } catch {
