@@ -29,14 +29,17 @@ export const ModalShell = ({ isOpen, onClose, title, children }: ModalShellProps
           onClick={onClose}
         />
 
-        {/* Modal panel */}
+        {/* Modal panel. `relative` keeps it above the fixed overlay before it:
+            without it, Tailwind 4 (where `transform` no longer applies a
+            transform) paints the overlay over the panel, and the overlay
+            takes every click and closes the modal. */}
         <div
           ref={containerRef}
           role="dialog"
           aria-modal="true"
           aria-labelledby={titleId}
           tabIndex={-1}
-          className="inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-2xl sm:w-full sm:p-6 focus:outline-none"
+          className="relative inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-2xl sm:w-full sm:p-6 focus:outline-none"
         >
           <div className="flex items-center justify-between mb-5">
             <h3 id={titleId} className="text-lg font-medium leading-6 text-gray-900">

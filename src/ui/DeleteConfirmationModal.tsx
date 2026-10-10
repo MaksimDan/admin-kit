@@ -56,6 +56,7 @@ export const DeleteConfirmationModal = ({
           onClick={onClose}
         />
 
+        {/* `relative` keeps the panel above the overlay; see ModalShell. */}
         <div
           ref={containerRef}
           role="alertdialog"
@@ -63,7 +64,7 @@ export const DeleteConfirmationModal = ({
           aria-labelledby={titleId}
           aria-describedby={descriptionId}
           tabIndex={-1}
-          className="inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6 focus:outline-none"
+          className="relative inline-block align-bottom bg-white rounded-lg px-4 pt-5 pb-4 text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full sm:p-6 focus:outline-none"
         >
           <div className="sm:flex sm:items-start">
             <div className="mx-auto flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-red-100 sm:mx-0 sm:h-10 sm:w-10">
